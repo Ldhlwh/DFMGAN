@@ -64,6 +64,15 @@ def setup_training_loop_kwargs(
     allow_tf32 = None, # Allow PyTorch to use TF32 for matmul and convolutions: <bool>, default = False
     nobench    = None, # Disable cuDNN benchmarking: <bool>, default = False
     workers    = None, # Override number of DataLoader workers: <int>, default = 3
+
+    # Added by DYX
+    ft = None,
+    transfer = None,
+    res_st = None,
+    mask_threshold = None,
+    lambda_match = None,
+    mode_seek = None,
+    lambda_ms = None,
 ):
     args = dnnlib.EasyDict()
 
@@ -87,7 +96,7 @@ def setup_training_loop_kwargs(
     args.network_snapshot_ticks = snap
 
     if metrics is None:
-        metrics = ['fid50k_full']
+        metrics = ['fid5k_full', 'kid5k_full', 'is5k']
     assert isinstance(metrics, list)
     if not all(metric_main.is_valid_metric(metric) for metric in metrics):
         raise UserError('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
@@ -182,8 +191,16 @@ def setup_training_loop_kwargs(
     args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
     args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
 
+    args.D_match_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
+    args.D_match_kwargs.channel_base = int(spec.fmaps * 32768)
+    args.D_match_kwargs.channel_max = 512
+    args.D_match_kwargs.num_fp16_res = 4
+    args.D_match_kwargs.conv_clamp = 256
+    args.D_match_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
+
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
+    args.D_match_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma)
 
     args.total_kimg = spec.kimg
@@ -331,12 +348,15 @@ def setup_training_loop_kwargs(
     if fp32:
         args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 0
         args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = None
+        args.D_match_kwargs.num_fp16_res = 0
+        args.D_match_kwargs.conv_clamp = None
 
     if nhwc is None:
         nhwc = False
     assert isinstance(nhwc, bool)
     if nhwc:
         args.G_kwargs.synthesis_kwargs.fp16_channels_last = args.D_kwargs.block_kwargs.fp16_channels_last = True
+        args.D_match_kwargs.block_kwargs.fp16_channels_last = True
 
     if nobench is None:
         nobench = False
@@ -355,6 +375,37 @@ def setup_training_loop_kwargs(
         if not workers >= 1:
             raise UserError('--workers must be at least 1')
         args.data_loader_kwargs.num_workers = workers
+
+    # Added by DYX
+    if ft is None or resume == 'noresume':
+        args.ft = 'default'
+    else:
+        args.ft = ft
+
+    if transfer != 'none':
+        args.ft = 'transfer'
+
+    args.G_kwargs.transfer = transfer
+    args.loss_kwargs.transfer = transfer
+
+    if transfer in ['res_block', 'res_block_match_dis']:
+        if res_st is None:
+            args.G_kwargs.synthesis_kwargs.res_st = 64
+        else:
+            args.G_kwargs.synthesis_kwargs.res_st = int(res_st)
+
+        if mask_threshold is None:
+            args.G_kwargs.mask_threshold = 0.0
+        else:
+            args.G_kwargs.mask_threshold = float(mask_threshold)
+
+    if lambda_match is None:
+        args.loss_kwargs.lambda_match = 1.0
+    else:
+        args.loss_kwargs.lambda_match = float(lambda_match)
+
+    args.loss_kwargs.mode_seek = 'none' if mode_seek is None else mode_seek
+    args.loss_kwargs.lambda_ms = 1.0 if lambda_ms is None else float(lambda_ms)
 
     return desc, args
 
@@ -402,7 +453,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--outdir', help='Where to save the results', required=True, metavar='DIR')
 @click.option('--gpus', help='Number of GPUs to use [default: 1]', type=int, metavar='INT')
 @click.option('--snap', help='Snapshot interval [default: 50 ticks]', type=int, metavar='INT')
-@click.option('--metrics', help='Comma-separated list or "none" [default: fid50k_full]', type=CommaSeparatedList())
+@click.option('--metrics', help='Comma-separated list or "none" [default: fid5k_full, kid5k_full, is5k]', type=CommaSeparatedList())
 @click.option('--seed', help='Random seed [default: 0]', type=int, metavar='INT')
 @click.option('-n', '--dry-run', help='Print training options and exit', is_flag=True)
 
@@ -434,6 +485,17 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--nobench', help='Disable cuDNN benchmarking', type=bool, metavar='BOOL')
 @click.option('--allow-tf32', help='Allow PyTorch to use TF32 internally', type=bool, metavar='BOOL')
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
+
+# Added by DYX
+@click.option('--ft', help='Finetune mode [default: default]', 
+    type=click.Choice(['default', 'ft_map', 'ft_syn', 'ft_syn_2', 'ft_map_syn_2']))
+@click.option('--transfer', help='Extra network for transfer learning [default: none]', type=click.Choice(['none', 'dual_mod', 'res_block', 'res_block_match_dis']))
+@click.option('--res-st', help='Starting resolution for ResBlock [default: 64]', type=click.Choice(['4', '8', '16', '32', '64', '128', '256']), metavar='INT')
+@click.option('--mask-threshold', help='The threshold value between mask/non-mask regions [default: 0.0]')
+@click.option('--lambda-match', help='Gmain_loss = loss_from_D + lambda * loss_from_D_match [default: 1.0]')
+@click.option('--mode-seek', help='Method for mode seeking loss [default: none]', type=click.Choice(['none', 'w/mask']))
+@click.option('--lambda-ms', help='loss_Gmain + lambda * loss_MS [default: 1.0]')
+
 
 def main(ctx, outdir, dry_run, **config_kwargs):
     """Train a GAN using the techniques described in the paper

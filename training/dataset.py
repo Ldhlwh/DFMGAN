@@ -118,7 +118,7 @@ class Dataset(torch.utils.data.Dataset):
     @property
     def num_channels(self):
         assert len(self.image_shape) == 3 # CHW
-        return self.image_shape[0]
+        return min(self.image_shape[0], 3)
 
     @property
     def resolution(self):
@@ -170,7 +170,7 @@ class ImageFolderDataset(Dataset):
             raise IOError('Path must point to a directory or zip')
 
         PIL.Image.init()
-        self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
+        self._image_fnames = sorted(fname for fname in self._all_fnames if ((self._file_ext(fname) in PIL.Image.EXTENSION) or self._file_ext(fname) == '.npy'))
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
 
@@ -212,6 +212,8 @@ class ImageFolderDataset(Dataset):
         with self._open_file(fname) as f:
             if pyspng is not None and self._file_ext(fname) == '.png':
                 image = pyspng.load(f.read())
+            elif self._file_ext(fname) == '.npy':
+                image = np.load(f)
             else:
                 image = np.array(PIL.Image.open(f))
         if image.ndim == 2:

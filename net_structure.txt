@@ -1,0 +1,124 @@
+Generator(
+  (synthesis): SynthesisNetwork(    23,191,522 params, syn_2 8,403,977 params
+    (b4): SynthesisBlock(
+      (conv1): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (affine): FullyConnectedLayer()
+      )
+    )
+    (b8): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (affine): FullyConnectedLayer()
+      )
+    )
+    (b16): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (affine): FullyConnectedLayer()
+      )
+    )
+    (b32): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (affine): FullyConnectedLayer()
+      )
+    )
+    (b64): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (affine): FullyConnectedLayer()
+      )
+    )
+    (b128): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (affine): FullyConnectedLayer()
+      )
+    )
+    (b256): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (affine): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (affine): FullyConnectedLayer()
+      )
+    )
+  )
+  (mapping): MappingNetwork(    525,312 params
+    (fc0): FullyConnectedLayer()
+    (fc1): FullyConnectedLayer()
+  )
+)
+
+===================================================
+
+Discriminator(                  24,001,089 params
+  (b256): DiscriminatorBlock(
+    (fromrgb): Conv2dLayer() 
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()       freeze 4
+  )
+  (b128): DiscriminatorBlock(
+    (conv0): Conv2dLayer()     
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()       freeze 7
+  )
+  (b64): DiscriminatorBlock(
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()       freeze 10
+  )
+  (b32): DiscriminatorBlock(
+    (conv0): Conv2dLayer()   
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()       freeze 13
+  )
+  (b16): DiscriminatorBlock(
+    (conv0): Conv2dLayer() 
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()       freeze 16, train 11,541,505 params
+  )
+  (b8): DiscriminatorBlock(
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()       freeze 19
+  )
+  (b4): DiscriminatorEpilogue(
+    (mbstd): MinibatchStdLayer()
+    (conv): Conv2dLayer()
+    (fc): FullyConnectedLayer()
+    (out): FullyConnectedLayer()
+  )
+)

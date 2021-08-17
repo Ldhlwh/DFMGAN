@@ -215,6 +215,8 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     for images, _labels in torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs):
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])
+        if images.shape[1] == 4:
+            images = images[:, :3, :, :]
         features = detector(images.to(opts.device), **detector_kwargs)
         stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
         progress.update(stats.num_items)
@@ -239,8 +241,8 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs)
 
     # Image generation func.
-    def run_generator(z, c):
-        img = G(z=z, c=c, **opts.G_kwargs)
+    def run_generator(z, c, defect_z = None):
+        img = G(z=z, c=c, defect_z = defect_z, **opts.G_kwargs)
         img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         return img
 
@@ -248,7 +250,11 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     if jit:
         z = torch.zeros([batch_gen, G.z_dim], device=opts.device)
         c = torch.zeros([batch_gen, G.c_dim], device=opts.device)
-        run_generator = torch.jit.trace(run_generator, [z, c], check_trace=False)
+        input_list = [z, c]
+        if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+            defect_z = torch.zeros([batch_gen, G.z_dim], device=opts.device)
+            input_list.append(defect_z)
+        run_generator = torch.jit.trace(run_generator, input_list, check_trace=False)
 
     # Initialize.
     stats = FeatureStats(**stats_kwargs)
@@ -263,7 +269,10 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             z = torch.randn([batch_gen, G.z_dim], device=opts.device)
             c = [dataset.get_label(np.random.randint(len(dataset))) for _i in range(batch_gen)]
             c = torch.from_numpy(np.stack(c)).pin_memory().to(opts.device)
-            images.append(run_generator(z, c))
+            defect_z = None
+            if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+                defect_z = torch.randn([batch_gen, G.z_dim], device=opts.device)
+            images.append(run_generator(z, c, defect_z))
         images = torch.cat(images)
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])

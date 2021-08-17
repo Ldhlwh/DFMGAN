@@ -334,6 +334,8 @@ class SynthesisBlock(torch.nn.Module):
         resolution,                         # Resolution of this block.
         img_channels,                       # Number of output color channels.
         is_last,                            # Is this the last block?
+        torgb_type, # 'none', 'rgb', 'gen_mask', 'upsample_mask'
+        mask_threshold = None,
         architecture        = 'skip',       # Architecture: 'orig', 'skip', 'resnet'.
         resample_filter     = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
         conv_clamp          = None,         # Clamp the output of convolution layers to +-X, None = disable clamping.
@@ -355,6 +357,9 @@ class SynthesisBlock(torch.nn.Module):
         self.num_conv = 0
         self.num_torgb = 0
 
+        self.torgb_type = torgb_type
+        self.mask_threshold = mask_threshold
+
         if in_channels == 0:
             self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
 
@@ -367,8 +372,8 @@ class SynthesisBlock(torch.nn.Module):
             conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
         self.num_conv += 1
 
-        if is_last or architecture == 'skip':
-            self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
+        if (is_last or architecture == 'skip') and (torgb_type in ['rgb', 'gen_mask']):
+            self.torgb = ToRGBLayer(out_channels, img_channels if torgb_type == 'rgb' else 1, w_dim=w_dim,
                 conv_clamp=conv_clamp, channels_last=self.channels_last)
             self.num_torgb += 1
 
@@ -376,7 +381,7 @@ class SynthesisBlock(torch.nn.Module):
             self.skip = Conv2dLayer(in_channels, out_channels, kernel_size=1, bias=False, up=2,
                 resample_filter=resample_filter, channels_last=self.channels_last)
 
-    def forward(self, x, img, ws, force_fp32=False, fused_modconv=None, **layer_kwargs):
+    def forward(self, x, img, ws, res_x = None, force_fp32=False, fused_modconv=None, **layer_kwargs):
         misc.assert_shape(ws, [None, self.num_conv + self.num_torgb, self.w_dim])
         w_iter = iter(ws.unbind(dim=1))
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
@@ -405,17 +410,32 @@ class SynthesisBlock(torch.nn.Module):
             x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
+        # ResBlock exists
+        if res_x is not None:
+            assert x.dtype == res_x.dtype and x.shape == res_x.shape
+            x = x + res_x
+
         # ToRGB.
         if img is not None:
-            misc.assert_shape(img, [None, self.img_channels, self.resolution // 2, self.resolution // 2])
+            misc.assert_shape(img, [None, self.img_channels if self.torgb_type == 'rgb' else 1, self.resolution // 2, self.resolution // 2])
             img = upfirdn2d.upsample2d(img, self.resample_filter)
-        if self.is_last or self.architecture == 'skip':
+
+        if (self.is_last or self.architecture == 'skip') and (self.torgb_type in ['rgb', 'gen_mask']):
             y = self.torgb(x, next(w_iter), fused_modconv=fused_modconv)
-            y = y.to(dtype=torch.float32, memory_format=torch.contiguous_format)
+            y = y.to(dtype=torch.float32 if self.torgb_type == 'rgb' else torch.float16, memory_format=torch.contiguous_format)
             img = img.add_(y) if img is not None else y
 
+        if self.torgb_type in ['gen_mask', 'upsample_mask']:
+            assert(x.shape[0] == img.shape[0] and img.shape[1] == 1 and x.shape[2] == img.shape[2] and x.shape[3] == img.shape[3])
+            x = x * (img >= self.mask_threshold)
+            #print(img.min().item(), img.max().item(), img.mean().item(), img.std().item())
+            #x = x * torch.sigmoid(img)
+
+
         assert x.dtype == dtype
-        assert img is None or img.dtype == torch.float32
+        if self.torgb_type == 'none':
+            return x
+        assert img.dtype == (torch.float32 if self.torgb_type == 'rgb' else torch.float16)
         return x, img
 
 #----------------------------------------------------------------------------
@@ -474,6 +494,86 @@ class SynthesisNetwork(torch.nn.Module):
 #----------------------------------------------------------------------------
 
 @persistence.persistent_class
+class SynthesisResNet(torch.nn.Module):
+    def __init__(self,
+        w_dim,                      # Intermediate latent (W) dimensionality.
+        img_resolution,             # Output image resolution.
+        img_channels,               # Number of color channels.
+        res_st,
+        mask_threshold,
+        channel_base    = 32768,    # Overall multiplier for the number of channels.
+        channel_max     = 512,      # Maximum number of channels in any layer.
+        num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
+        **block_kwargs,             # Arguments for SynthesisBlock.
+    ):
+        assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
+        super().__init__()
+        self.w_dim = w_dim
+        self.img_resolution = img_resolution
+        self.img_resolution_log2 = int(np.log2(img_resolution))
+        self.img_channels = img_channels
+        self.block_resolutions = [2 ** i for i in range(2, self.img_resolution_log2 + 1)]
+        channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
+        fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
+        self.res_st = res_st
+
+        self.num_ws = 0
+        self.num_defect_ws = 0
+        for res in self.block_resolutions:
+            in_channels = channels_dict[res // 2] if res > 4 else 0
+            out_channels = channels_dict[res]
+            use_fp16 = (res >= fp16_resolution)
+            is_last = (res == self.img_resolution)
+            block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
+                img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, torgb_type = 'rgb', **block_kwargs)
+            self.num_ws += block.num_conv
+            if is_last:
+                self.num_ws += block.num_torgb
+            setattr(self, f'b{res}', block)
+            if res >= self.res_st:
+                res_block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
+                    img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, torgb_type = 'gen_mask' if res == self.res_st else 'upsample_mask', mask_threshold=mask_threshold, **block_kwargs)
+                self.num_defect_ws += res_block.num_conv
+                if res == self.res_st:
+                    self.num_defect_ws += 1
+                setattr(self, f'res_b{res}', res_block)
+
+    def forward(self, ws, defect_ws, fix_residual_to_zero = False, output_mask = False, **block_kwargs):
+        block_ws, res_block_ws = [], [None for _ in range(int(np.log2(self.res_st)) - 2)]
+        with torch.autograd.profiler.record_function('split_ws'):
+            misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
+            misc.assert_shape(defect_ws, [None, self.num_defect_ws, self.w_dim])
+            ws = ws.to(torch.float32)
+            defect_ws = defect_ws.to(torch.float32)
+            w_idx = defect_w_idx = 0
+            for res in self.block_resolutions:
+                block = getattr(self, f'b{res}')
+                block_ws.append(ws.narrow(1, w_idx, block.num_conv + block.num_torgb))
+                w_idx += block.num_conv
+                if res >= self.res_st:
+                    res_block = getattr(self, f'res_b{res}')
+                    res_block_ws.append(defect_ws.narrow(1, defect_w_idx, res_block.num_conv + res_block.num_torgb))
+                    defect_w_idx += res_block.num_conv
+                
+
+        x = img = None
+        for res, cur_ws, cur_res_ws in zip(self.block_resolutions, block_ws, res_block_ws):
+            res_x = None
+            if res >= self.res_st and not fix_residual_to_zero:
+                res_block = getattr(self, f'res_b{res}')
+                res_x, mask = res_block(x, None if res == self.res_st else mask, cur_res_ws, **block_kwargs)
+
+            block = getattr(self, f'b{res}')            
+            x, img = block(x, img, cur_ws, res_x = res_x, **block_kwargs)
+
+        if output_mask:
+            return img, mask
+        else:
+            return img
+
+#----------------------------------------------------------------------------
+
+@persistence.persistent_class
 class Generator(torch.nn.Module):
     def __init__(self,
         z_dim,                      # Input latent (Z) dimensionality.
@@ -481,6 +581,8 @@ class Generator(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
+        transfer,   # added by DYX
+        mask_threshold,
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         synthesis_kwargs    = {},   # Arguments for SynthesisNetwork.
     ):
@@ -490,14 +592,40 @@ class Generator(torch.nn.Module):
         self.w_dim = w_dim
         self.img_resolution = img_resolution
         self.img_channels = img_channels
-        self.synthesis = SynthesisNetwork(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels, **synthesis_kwargs)
+        
+        self.transfer = transfer
+        self.mask_threshold = mask_threshold
+
+        if self.transfer in ['res_block', 'res_block_match_dis']:
+            self.synthesis = SynthesisResNet(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels, mask_threshold=self.mask_threshold, **synthesis_kwargs)
+        else:
+            self.synthesis = SynthesisNetwork(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels, **synthesis_kwargs)
         self.num_ws = self.synthesis.num_ws
         self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
-    def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
+        if self.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+            self.num_defect_ws = self.synthesis.num_defect_ws
+            self.defect_mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_defect_ws, **mapping_kwargs)
+   
+    def forward(self, z, c, defect_z=None, output_mask = False, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
         ws = self.mapping(z, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
-        img = self.synthesis(ws, **synthesis_kwargs)
-        return img
+        if self.transfer == 'dual_mod':
+            defect_ws = self.defect_mapping(defect_z, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
+            ws += defect_ws
+
+        if self.transfer in ['res_block', 'res_block_match_dis']:
+            defect_ws = self.defect_mapping(defect_z, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
+            if output_mask:
+                img, mask = self.synthesis(ws, defect_ws, output_mask = output_mask, **synthesis_kwargs)
+            else:
+                img = self.synthesis(ws, defect_ws, **synthesis_kwargs)
+        else:
+            img = self.synthesis(ws, **synthesis_kwargs)
+        
+        if output_mask:
+            return img, mask
+        else:
+            return img
 
 #----------------------------------------------------------------------------
 

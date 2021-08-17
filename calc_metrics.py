@@ -50,10 +50,28 @@ def subprocess_fn(rank, args, temp_dir):
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     G = copy.deepcopy(args.G).eval().requires_grad_(False).to(device)
+
+    '''
     if rank == 0 and args.verbose:
         z = torch.empty([1, G.z_dim], device=device)
         c = torch.empty([1, G.c_dim], device=device)
         misc.print_module_summary(G, [z, c])
+    '''
+
+    if rank == 0 and args.verbose:
+        z = torch.empty([1, G.z_dim], device=device)
+        c = torch.empty([1, G.c_dim], device=device)
+        input_list = [z, c]
+        if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+            defect_z = torch.empty([1, G.z_dim], device=device)
+            input_list.append(defect_z)
+
+        if G.transfer == 'res_block_match_dis':
+            input_list.append(True)
+            misc.print_module_summary(G, input_list)
+        else:
+            misc.print_module_summary(G, input_list)
+
 
     # Calculate each metric.
     for metric in args.metrics:
@@ -78,6 +96,8 @@ class CommaSeparatedList(click.ParamType):
 
     def convert(self, value, param, ctx):
         _ = param, ctx
+        if isinstance(value, list):
+            return value
         if value is None or value.lower() == 'none' or value == '':
             return []
         return value.split(',')
@@ -87,7 +107,7 @@ class CommaSeparatedList(click.ParamType):
 @click.command()
 @click.pass_context
 @click.option('network_pkl', '--network', help='Network pickle filename or URL', metavar='PATH', required=True)
-@click.option('--metrics', help='Comma-separated list or "none"', type=CommaSeparatedList(), default='fid50k_full', show_default=True)
+@click.option('--metrics', help='Comma-separated list or "none"', type=CommaSeparatedList(), default='fid5k_full,kid5k_full,is5k', show_default=True)
 @click.option('--data', help='Dataset to evaluate metrics against (directory or zip) [default: same as training data]', metavar='PATH')
 @click.option('--mirror', help='Whether the dataset was augmented with x-flips during training [default: look up]', type=bool, metavar='BOOL')
 @click.option('--gpus', help='Number of GPUs to use', type=int, default=1, metavar='INT', show_default=True)

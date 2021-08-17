@@ -7,6 +7,7 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import os
+from re import L
 import time
 import copy
 import json
@@ -24,12 +25,15 @@ from torch_utils.ops import grid_sample_gradfix
 import legacy
 from metrics import metric_main
 
+# Added by DYX
+import itertools
+
 #----------------------------------------------------------------------------
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
     rnd = np.random.RandomState(random_seed)
-    gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
-    gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
+    gw = np.clip(2560 // training_set.image_shape[2], 7, 32)
+    gh = np.clip(2048 // training_set.image_shape[1], 4, 32)
 
     # No labels => show random subset of training samples.
     if not training_set.has_labels:
@@ -118,6 +122,12 @@ def training_loop(
     allow_tf32              = False,    # Enable torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32?
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
+
+    # added by DYX
+    ft = None,
+    D_match_kwargs = {},
+    D_match_opt_kwargs = {},
+    D_match_reg_interval = 16,
 ):
     # Initialize.
     start_time = time.time()
@@ -150,6 +160,9 @@ def training_loop(
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
+    if G_kwargs.transfer == 'res_block_match_dis':
+        common_match_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels + 1)
+        D_match = dnnlib.util.construct_class_by_name(**D_match_kwargs, **common_match_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
 
     # Resume from existing pickle.
     if (resume_pkl is not None) and (rank == 0):
@@ -163,8 +176,19 @@ def training_loop(
     if rank == 0:
         z = torch.empty([batch_gpu, G.z_dim], device=device)
         c = torch.empty([batch_gpu, G.c_dim], device=device)
-        img = misc.print_module_summary(G, [z, c])
-        misc.print_module_summary(D, [img, c])
+        input_list = [z, c]
+        if G_kwargs.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+            defect_z = torch.empty([batch_gpu, G.z_dim], device=device)
+            input_list.append(defect_z)
+
+        if G_kwargs.transfer == 'res_block_match_dis':
+            input_list.append(True)
+            img, mask = misc.print_module_summary(G, input_list)
+            misc.print_module_summary(D, [img, c])
+            misc.print_module_summary(D_match, [torch.cat([img, mask], dim = 1), c])
+        else:
+            img = misc.print_module_summary(G, input_list)
+            misc.print_module_summary(D, [img, c])
 
     # Setup augmentation.
     if rank == 0:
@@ -181,10 +205,15 @@ def training_loop(
     if rank == 0:
         print(f'Distributing across {num_gpus} GPUs...')
     ddp_modules = dict()
-    for name, module in [('G_mapping', G.mapping), ('G_synthesis', G.synthesis), ('D', D), (None, G_ema), ('augment_pipe', augment_pipe)]:
+    module_list = [('G_mapping', G.mapping), ('G_synthesis', G.synthesis), ('D', D), (None, G_ema), ('augment_pipe', augment_pipe)]
+    if G_kwargs.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+        module_list.append(('G_defect_mapping', G.defect_mapping))
+    if G_kwargs.transfer == 'res_block_match_dis':
+        module_list.append(('D_match', D_match))
+    for name, module in module_list:
         if (num_gpus > 1) and (module is not None) and len(list(module.parameters())) != 0:
             module.requires_grad_(True)
-            module = torch.nn.parallel.DistributedDataParallel(module, device_ids=[device], broadcast_buffers=False)
+            module = torch.nn.parallel.DistributedDataParallel(module, device_ids=[device], broadcast_buffers=False, find_unused_parameters = True)
             module.requires_grad_(False)
         if name is not None:
             ddp_modules[name] = module
@@ -194,16 +223,68 @@ def training_loop(
         print('Setting up training phases...')
     loss = dnnlib.util.construct_class_by_name(device=device, **ddp_modules, **loss_kwargs) # subclass of training.loss.Loss
     phases = []
-    for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
+    training_nets = [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]
+    if G_kwargs.transfer == 'res_block_match_dis':
+        training_nets.append(('D_match', D_match, D_match_opt_kwargs, D_match_reg_interval))
+    for name, module, opt_kwargs, reg_interval in training_nets:
+        
+        num_param = 0
+        if name == 'D':
+            num_param = sum([p.numel() for p in module.parameters()])
+            target_param = module.parameters()
+
+        elif name == 'D_match':
+            num_param = sum([p.numel() for p in module.parameters()])
+            target_param = module.parameters()
+
+        elif name == 'G':
+            if ft == 'default':
+                num_param = sum([p.numel() for p in module.parameters()])
+                target_param = module.parameters()
+            elif ft == 'ft_map':
+                num_param = sum([p.numel() for p in module.mapping.parameters()])
+                target_param = module.mapping.parameters()
+            elif ft == 'ft_syn':
+                num_param = sum([p.numel() for p in module.synthesis.parameters()])
+                target_param = module.synthesis.parameters()
+            elif ft.startswith('ft_syn_'):
+                num_trainable_block = int(ft.split('_')[-1])
+                syn_modules = [module.synthesis.b4, module.synthesis.b8, module.synthesis.b16, module.synthesis.b32, module.synthesis.b64, module.synthesis.b128, module.synthesis.b256]
+                target_param = itertools.chain(*[mod.parameters() for mod in syn_modules[:num_trainable_block]])
+                num_param = sum([p.numel() for p in target_param])
+                target_param = itertools.chain(*[mod.parameters() for mod in syn_modules[:num_trainable_block]])
+            elif ft.startswith('ft_map_syn_'):
+                num_trainable_block = int(ft.split('_')[-1])
+                syn_modules = [module.synthesis.b4, module.synthesis.b8, module.synthesis.b16, module.synthesis.b32, module.synthesis.b64, module.synthesis.b128, module.synthesis.b256]
+                target_param = itertools.chain(*[mod.parameters() for mod in syn_modules[:num_trainable_block]], module.mapping.parameters())
+                num_param = sum([p.numel() for p in target_param])
+                target_param = itertools.chain(*[mod.parameters() for mod in syn_modules[:num_trainable_block]], module.mapping.parameters())
+            elif ft == 'transfer':
+                if G_kwargs.transfer == 'dual_mod':
+                    target_param = module.defect_mapping.parameters()
+                    num_param = sum([p.numel() for p in target_param])
+                    target_param = module.defect_mapping.parameters()
+                elif G_kwargs.transfer in ['res_block', 'res_block_match_dis']:
+                    target_param = [module.defect_mapping.parameters()]
+                    num_param += sum([p.numel() for p in module.defect_mapping.parameters()])
+                    for res in [4, 8, 16, 32, 64, 128, 256]:
+                        if res >= G_kwargs.synthesis_kwargs.res_st:
+                            target_param.append(getattr(module.synthesis, f'res_b{res}').parameters())
+                            num_param += sum([p.numel() for p in getattr(module.synthesis, f'res_b{res}').parameters()])
+                    target_param = itertools.chain(*target_param)
+
+        if rank == 0:
+            print('[Duan] Training %d params of %s' % (num_param, name))
+
         if reg_interval is None:
-            opt = dnnlib.util.construct_class_by_name(params=module.parameters(), **opt_kwargs) # subclass of torch.optim.Optimizer
+            opt = dnnlib.util.construct_class_by_name(params=target_param, **opt_kwargs) # subclass of torch.optim.Optimizer
             phases += [dnnlib.EasyDict(name=name+'both', module=module, opt=opt, interval=1)]
         else: # Lazy regularization.
             mb_ratio = reg_interval / (reg_interval + 1)
             opt_kwargs = dnnlib.EasyDict(opt_kwargs)
             opt_kwargs.lr = opt_kwargs.lr * mb_ratio
             opt_kwargs.betas = [beta ** mb_ratio for beta in opt_kwargs.betas]
-            opt = dnnlib.util.construct_class_by_name(module.parameters(), **opt_kwargs) # subclass of torch.optim.Optimizer
+            opt = dnnlib.util.construct_class_by_name(target_param, **opt_kwargs) # subclass of torch.optim.Optimizer
             phases += [dnnlib.EasyDict(name=name+'main', module=module, opt=opt, interval=1)]
             phases += [dnnlib.EasyDict(name=name+'reg', module=module, opt=opt, interval=reg_interval)]
     for phase in phases:
@@ -217,13 +298,21 @@ def training_loop(
     grid_size = None
     grid_z = None
     grid_c = None
+    grid_defect_z = None
     if rank == 0:
         print('Exporting sample images...')
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
+        if G_kwargs.transfer == 'res_block_match_dis':
+            images = images[:, :3, :, :]
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+        if G_kwargs.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+            grid_defect_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
+        if G_kwargs.transfer == 'none':
+            images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+        elif G_kwargs.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+            images = torch.cat([G_ema(z=z, c=c, defect_z=defect_z, noise_mode='const').cpu() for z, c, defect_z in zip(grid_z, grid_c, grid_defect_z)]).numpy()
         save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
 
     # Initialize logs.
@@ -258,7 +347,14 @@ def training_loop(
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
             phase_real_img, phase_real_c = next(training_set_iterator)
+            if G_kwargs.transfer == 'res_block_match_dis':
+                assert phase_real_img.ndim == 4 and phase_real_img.shape[1] == 4
+                phase_real_img, phase_real_mask = phase_real_img[:, :3, :, :], phase_real_img[:, 3:, :, :]
+
             phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
+            if G_kwargs.transfer == 'res_block_match_dis':
+                phase_real_mask = (phase_real_mask.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
+
             phase_real_c = phase_real_c.to(device).split(batch_gpu)
             all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
             all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
@@ -266,8 +362,20 @@ def training_loop(
             all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
 
+            all_gen_defect_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
+            all_gen_defect_z = [phase_gen_defect_z.split(batch_gpu) for phase_gen_defect_z in all_gen_defect_z.split(batch_size)]
+
         # Execute training phases.
-        for phase, phase_gen_z, phase_gen_c in zip(phases, all_gen_z, all_gen_c):
+        if G_kwargs.transfer == 'none':
+            zip_iter = zip(phases, all_gen_z, all_gen_c)
+        elif G_kwargs.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+            zip_iter = zip(phases, all_gen_z, all_gen_c, all_gen_defect_z)
+
+        for iter_cmbn in zip_iter:
+            phase, phase_gen_z, phase_gen_c = iter_cmbn[:3]
+            if G_kwargs.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+                phase_gen_defect_z = iter_cmbn[3]
+
             if batch_idx % phase.interval != 0:
                 continue
 
@@ -278,10 +386,27 @@ def training_loop(
             phase.module.requires_grad_(True)
 
             # Accumulate gradients over multiple rounds.
-            for round_idx, (real_img, real_c, gen_z, gen_c) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c)):
+            if G_kwargs.transfer == 'none':
+                enum_iter = enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c))
+            elif G_kwargs.transfer in ['dual_mod', 'res_block']:
+                enum_iter = enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_gen_defect_z))
+            elif G_kwargs.transfer == 'res_block_match_dis':
+                enum_iter = enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_gen_defect_z, phase_real_mask))
+
+            for round_idx, iter_cmbn_2 in enum_iter:
+                real_img, real_c, gen_z, gen_c = iter_cmbn_2[:4]
+                gen_defect_z = None
+                real_mask = None
+                gen_defect_z2 = None
+                if G_kwargs.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+                    gen_defect_z = iter_cmbn_2[4]
+                if G_kwargs.transfer == 'res_block_match_dis':
+                    real_mask = iter_cmbn_2[5]
+
                 sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                 gain = phase.interval
-                loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, sync=sync, gain=gain)
+                loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, sync=sync, gain=gain,
+                     gen_defect_z = gen_defect_z, real_mask = real_mask, mask_threshold = G_kwargs.mask_threshold)
 
             # Update weights.
             phase.module.requires_grad_(False)
@@ -346,15 +471,33 @@ def training_loop(
 
         # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
-            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+            if G_kwargs.transfer == 'none':
+                images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+            elif G_kwargs.transfer == 'dual_mod':
+                images = torch.cat([G_ema(z=z, c=c, defect_z=defect_z, noise_mode='const').cpu() for z, c, defect_z in zip(grid_z, grid_c, grid_defect_z)]).numpy()
+            elif G_kwargs.transfer in ['res_block', 'res_block_match_dis']:
+                images, masks = [], []
+                for z, c, defect_z in zip(grid_z, grid_c, grid_defect_z):
+                    image, mask = G_ema(z=z, c=c, defect_z=defect_z, output_mask = True, noise_mode='const')
+                    images.append(image.cpu())
+                    masks.append(mask.cpu())
+                images = torch.cat(images).numpy()
+                masks = torch.cat(masks).numpy()
+                save_image_grid(masks, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[-1,1], grid_size=grid_size)
+                masks[masks >= G_kwargs.mask_threshold] = 1.0
+                masks[masks < G_kwargs.mask_threshold] = -1.0
+                save_image_grid(masks, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_rounded_mask.png'), drange=[-1,1], grid_size=grid_size)
+            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_img.png'), drange=[-1,1], grid_size=grid_size)
 
         # Save network snapshot.
         snapshot_pkl = None
         snapshot_data = None
         if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
             snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
-            for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
+            saving_modules = [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]
+            if G_kwargs.transfer == 'res_block_match_dis':
+                saving_modules.append(('D_match', D_match))
+            for name, module in saving_modules:
                 if module is not None:
                     if num_gpus > 1:
                         misc.check_ddp_consistency(module, ignore_regex=r'.*\.w_avg')
