@@ -323,6 +323,30 @@ class ToRGBLayer(torch.nn.Module):
         x = bias_act.bias_act(x, self.bias.to(x.dtype), clamp=self.conv_clamp)
         return x
 
+
+@persistence.persistent_class
+class ToMaskLayer(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, w_dim, kernel_size=1, conv_clamp=None, channels_last=False):
+        super().__init__()
+        num_channels = [in_channels, 64, 16, 4, out_channels]
+        self.conv_clamp = conv_clamp
+        self.padding = kernel_size // 2
+        self.affine = torch.nn.ModuleList([FullyConnectedLayer(w_dim, num_channels[i], bias_init=1) for i in range(len(num_channels) - 1)])
+        memory_format = torch.channels_last if channels_last else torch.contiguous_format
+        self.weight = torch.nn.ParameterList([torch.nn.Parameter(torch.randn([num_channels[i + 1], num_channels[i], kernel_size, kernel_size]).to(memory_format=memory_format)) for i in range(len(num_channels) - 1)])
+        self.bias = torch.nn.ParameterList([torch.nn.Parameter(torch.zeros([num_channels[i + 1]])) for i in range(len(num_channels) - 1)])
+        self.weight_gain = [1 / np.sqrt(num_channels[i] * (kernel_size ** 2)) for i in range(len(num_channels) - 1)]
+
+    def forward(self, x, w, fused_modconv=True):
+        for i in range(len(self.weight)):
+            styles = self.affine[i](w) * self.weight_gain[i]            
+            x = modulated_conv2d(x = x, weight=self.weight[i], styles=styles, padding = self.padding, demodulate=False, fused_modconv=fused_modconv)
+            x = bias_act.bias_act(x, self.bias[i].to(x.dtype), clamp=self.conv_clamp)
+            if i < len(self.weight) - 1:
+                x = torch.relu(x)
+        return x
+
+
 #----------------------------------------------------------------------------
 
 @persistence.persistent_class
@@ -335,6 +359,8 @@ class SynthesisBlock(torch.nn.Module):
         img_channels,                       # Number of output color channels.
         is_last,                            # Is this the last block?
         torgb_type, # 'none', 'rgb', 'gen_mask', 'upsample_mask'
+        no_round,
+        tanh_k,
         mask_threshold = None,
         architecture        = 'skip',       # Architecture: 'orig', 'skip', 'resnet'.
         resample_filter     = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
@@ -359,6 +385,8 @@ class SynthesisBlock(torch.nn.Module):
 
         self.torgb_type = torgb_type
         self.mask_threshold = mask_threshold
+        self.no_round = no_round
+        self.tanh_k = tanh_k
 
         if in_channels == 0:
             self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
@@ -373,8 +401,19 @@ class SynthesisBlock(torch.nn.Module):
         self.num_conv += 1
 
         if (is_last or architecture == 'skip') and (torgb_type in ['rgb', 'gen_mask']):
-            self.torgb = ToRGBLayer(out_channels, img_channels if torgb_type == 'rgb' else 1, w_dim=w_dim,
-                conv_clamp=conv_clamp, channels_last=self.channels_last)
+            if torgb_type == 'rgb':
+                self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
+                        conv_clamp=conv_clamp, channels_last=self.channels_last)
+
+            # All ToRGB
+            elif torgb_type == 'gen_mask':
+                self.torgb = ToRGBLayer(out_channels, 1, w_dim=w_dim,
+                        conv_clamp=conv_clamp, channels_last=self.channels_last)
+
+            # ToMask            
+            # elif torgb_type == 'gen_mask':
+            #     self.torgb = ToMaskLayer(out_channels, 1, w_dim=w_dim, kernel_size = 3,
+            #             conv_clamp=conv_clamp, channels_last=self.channels_last)
             self.num_torgb += 1
 
         if in_channels != 0 and architecture == 'resnet':
@@ -419,17 +458,21 @@ class SynthesisBlock(torch.nn.Module):
         if img is not None:
             misc.assert_shape(img, [None, self.img_channels if self.torgb_type == 'rgb' else 1, self.resolution // 2, self.resolution // 2])
             img = upfirdn2d.upsample2d(img, self.resample_filter)
-
+ 
         if (self.is_last or self.architecture == 'skip') and (self.torgb_type in ['rgb', 'gen_mask']):
             y = self.torgb(x, next(w_iter), fused_modconv=fused_modconv)
             y = y.to(dtype=torch.float32 if self.torgb_type == 'rgb' else torch.float16, memory_format=torch.contiguous_format)
             img = img.add_(y) if img is not None else y
+            if self.torgb_type == 'gen_mask':
+                img = torch.tanh(self.tanh_k * img)
 
         if self.torgb_type in ['gen_mask', 'upsample_mask']:
             assert(x.shape[0] == img.shape[0] and img.shape[1] == 1 and x.shape[2] == img.shape[2] and x.shape[3] == img.shape[3])
-            x = x * (img >= self.mask_threshold)
-            #print(img.min().item(), img.max().item(), img.mean().item(), img.std().item())
-            #x = x * torch.sigmoid(img)
+            if self.no_round:
+                x = x * (img / 2.0 + 0.5)
+            else:
+                x = x * (img >= self.mask_threshold)
+            
 
 
         assert x.dtype == dtype

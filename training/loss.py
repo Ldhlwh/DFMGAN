@@ -144,7 +144,7 @@ class StyleGAN2Loss(Loss):
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
                 if self.transfer == 'res_block_match_dis':
                     #gen_mask[gen_mask >= mask_threshold] = 1.0
-                    gen_mask = torch.tanh(gen_mask)
+                    #gen_mask = torch.tanh(gen_mask)
                     #gen_mask[gen_mask < mask_threshold] = -1.0
                     gen_img_mask = torch.cat([gen_img, gen_mask], dim = 1)
                     gen_match_logits = self.run_D_match(gen_img_mask, gen_c, sync=False)
@@ -164,7 +164,7 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/G/loss', loss_Gmain)
 
             with torch.autograd.profiler.record_function('Gmain_backward'):
-                (loss_Gmain if self.mode_seek == 'none' else loss_Gmain + loss_MS).mean().mul(gain).backward()
+                (loss_Gmain if self.mode_seek == 'none' else loss_Gmain + self.lambda_ms * loss_MS).mean().mul(gain).backward()
 
         # Gpl: Apply path length regularization.
         if do_Gpl:
@@ -230,7 +230,7 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function('D_matchgen_forward'):
                 gen_img, gen_mask, _gen_ws = self.run_G(gen_z, gen_c, sync=False, defect_z = gen_defect_z, transfer = self.transfer, output_mask = True)
                 #gen_mask[gen_mask >= mask_threshold] = 1.0
-                gen_mask = torch.tanh(gen_mask)
+                #gen_mask = torch.tanh(gen_mask)
                 #gen_mask[gen_mask < mask_threshold] = -1.0
                 gen_img_mask = torch.cat([gen_img, gen_mask], dim = 1)
                 gen_logits = self.run_D_match(gen_img_mask, gen_c, sync=False) # Gets synced by loss_Dreal.

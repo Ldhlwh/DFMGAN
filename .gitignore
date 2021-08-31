@@ -6,4 +6,9 @@ __pycache__/
 /docs/
 /gifs*/
 /*_runs/
-/*.pkl
+
+*png
+*.pth
+*.pkl
+*.gif
+/test.py

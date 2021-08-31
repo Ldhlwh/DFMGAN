@@ -73,6 +73,8 @@ def setup_training_loop_kwargs(
     lambda_match = None,
     mode_seek = None,
     lambda_ms = None,
+    no_round = None,
+    tanh_k = None,
 ):
     args = dnnlib.EasyDict()
 
@@ -407,6 +409,15 @@ def setup_training_loop_kwargs(
     args.loss_kwargs.mode_seek = 'none' if mode_seek is None else mode_seek
     args.loss_kwargs.lambda_ms = 1.0 if lambda_ms is None else float(lambda_ms)
 
+    if no_round is None:
+        no_round = False
+    assert isinstance(no_round, bool)
+    args.G_kwargs.synthesis_kwargs.no_round = no_round
+
+    if tanh_k is None:
+        tanh_k = 1.0
+    args.G_kwargs.synthesis_kwargs.tanh_k = tanh_k
+
     return desc, args
 
 #----------------------------------------------------------------------------
@@ -491,10 +502,12 @@ class CommaSeparatedList(click.ParamType):
     type=click.Choice(['default', 'ft_map', 'ft_syn', 'ft_syn_2', 'ft_map_syn_2']))
 @click.option('--transfer', help='Extra network for transfer learning [default: none]', type=click.Choice(['none', 'dual_mod', 'res_block', 'res_block_match_dis']))
 @click.option('--res-st', help='Starting resolution for ResBlock [default: 64]', type=click.Choice(['4', '8', '16', '32', '64', '128', '256']), metavar='INT')
-@click.option('--mask-threshold', help='The threshold value between mask/non-mask regions [default: 0.0]')
-@click.option('--lambda-match', help='Gmain_loss = loss_from_D + lambda * loss_from_D_match [default: 1.0]')
+@click.option('--mask-threshold', help='The threshold value between mask/non-mask regions [default: 0.0]', type=float)
+@click.option('--lambda-match', help='Gmain_loss = loss_from_D + lambda * loss_from_D_match [default: 1.0]', type=float)
 @click.option('--mode-seek', help='Method for mode seeking loss [default: none]', type=click.Choice(['none', 'w/mask']))
-@click.option('--lambda-ms', help='loss_Gmain + lambda * loss_MS [default: 1.0]')
+@click.option('--lambda-ms', help='loss_Gmain + lambda * loss_MS [default: 1.0]', type=float)
+@click.option('--no-round', help='Use a soft mask if setting True [default: False]', type=bool, metavar='BOOL', is_flag = True)
+@click.option('--tanh-k', help='mask = tanh(k * raw_mask) [default: 1.0]', type=float)
 
 
 def main(ctx, outdir, dry_run, **config_kwargs):

@@ -26,7 +26,7 @@ import legacy
 @click.option('--output', type=str, required=True)
 
 #added by DYX
-@click.option('--latent-mode', help='randomly sampled latent codes', type=click.Choice(['both', 'content', 'defect', 'nores']), default='both', show_default=True)
+@click.option('--latent-mode', help='randomly sampled latent codes', type=click.Choice(['both', 'content', 'defect', 'nores', 'none']), default='both', show_default=True)
 
 def generate_gif(
     network_pkl: str,
@@ -88,11 +88,11 @@ def generate_gif(
         return to_image_grid(images)
     
     for i in range(num_phases):
-        dlatents0 = G.mapping(torch.from_numpy(latents[i - 1] if latent_mode != 'defect' else latents[0]).to(device), None)
-        dlatents1 = G.mapping(torch.from_numpy(latents[i] if latent_mode != 'defect' else latents[0]).to(device), None)
+        dlatents0 = G.mapping(torch.from_numpy(latents[i - 1] if latent_mode not in ['defect', 'none'] else latents[0]).to(device), None)
+        dlatents1 = G.mapping(torch.from_numpy(latents[i] if latent_mode not in ['defect', 'none'] else latents[0]).to(device), None)
         if transfer:
-            defectlatents0 = G.defect_mapping(torch.from_numpy(latents_defect[i - 1] if latent_mode != 'content' else latents_defect[0]).to(device), None)
-            defectlatents1 = G.defect_mapping(torch.from_numpy(latents_defect[i] if latent_mode != 'content' else latents_defect[0]).to(device), None)
+            defectlatents0 = G.defect_mapping(torch.from_numpy(latents_defect[i - 1] if latent_mode not in ['content', 'none'] else latents_defect[0]).to(device), None)
+            defectlatents1 = G.defect_mapping(torch.from_numpy(latents_defect[i] if latent_mode not in ['content', 'none'] else latents_defect[0]).to(device), None)
         for j in range(transition_frames):
             dlatents = (dlatents0 * (transition_frames - j) + dlatents1 * j) / transition_frames
             if transfer: 

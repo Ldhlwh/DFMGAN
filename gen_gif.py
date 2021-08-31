@@ -22,9 +22,9 @@ import legacy
 @click.option('--static-frames', help='Number of static frames per phase', default=5, type=int)
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
-@click.option('--output', type=str, required=True)
+@click.option('--output', type=str)
 
-@click.option('--fix-content', type=click.BOOL, default=False, is_flag = True)
+@click.option('--fix-content', '--fc', type=click.BOOL, default=False, is_flag = True)
 
 
 def generate_gif(
@@ -58,11 +58,21 @@ def generate_gif(
         print('Must be a transfer model.')
         exit(1)
 
+    assert network_pkl.split('/')[0].endswith('runs')
+    assert network_pkl.split('/')[2].startswith('000')
+    assert network_pkl.endswith('pkl')
+
+    if output is None:
+        kimg = network_pkl.split('/')[-1].split('.')[0].split('-')[-1]
+        kimg = int(kimg)
+        output = os.path.join('gifs', '%s_%d%s.gif' % (network_pkl.split('/')[1], kimg, '_fc' if fix_content else ''))
+        print('Will save to %s' % output)
+
     outdir = os.path.dirname(output)
     if outdir:
         os.makedirs(outdir, exist_ok=True)
 
-    if output.endswith('_fc') and not fix_content:
+    if (output.endswith('_fc') or output.endswith('_fc.gif')) and not fix_content:
         print('Automatically setting fix_content = True.')
         fix_content = True
 
