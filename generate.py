@@ -123,7 +123,7 @@ def generate_images(
             defect_z = torch.from_numpy(np.random.RandomState(seed + len(seeds)).randn(1, G.z_dim)).to(device)
             ws = G.mapping(z, None)
             defect_ws = G.defect_mapping(defect_z, label, truncation_psi=truncation_psi)
-            if G.transfer in ['res_block', 'res_block_match_dis']:
+            if G.transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis']:
                 img, mask = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = True, fix_residual_to_zero = False)
                 good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = False, fix_residual_to_zero = True)
                 img = torch.cat([good_img, img, mask.repeat((1, 3, 1, 1))], dim = 2)

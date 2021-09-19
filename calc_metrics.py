@@ -62,11 +62,11 @@ def subprocess_fn(rank, args, temp_dir):
         z = torch.empty([1, G.z_dim], device=device)
         c = torch.empty([1, G.c_dim], device=device)
         input_list = [z, c]
-        if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+        if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis', 'res_block_uni_dis']:
             defect_z = torch.empty([1, G.z_dim], device=device)
             input_list.append(defect_z)
 
-        if G.transfer == 'res_block_match_dis':
+        if G.transfer in ['res_block_match_dis', 'res_block_uni_dis']:
             input_list.append(True)
             misc.print_module_summary(G, input_list)
         else:

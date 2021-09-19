@@ -251,7 +251,7 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
         z = torch.zeros([batch_gen, G.z_dim], device=opts.device)
         c = torch.zeros([batch_gen, G.c_dim], device=opts.device)
         input_list = [z, c]
-        if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+        if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis', 'res_block_uni_dis']:
             defect_z = torch.zeros([batch_gen, G.z_dim], device=opts.device)
             input_list.append(defect_z)
         run_generator = torch.jit.trace(run_generator, input_list, check_trace=False)
@@ -270,7 +270,7 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             c = [dataset.get_label(np.random.randint(len(dataset))) for _i in range(batch_gen)]
             c = torch.from_numpy(np.stack(c)).pin_memory().to(opts.device)
             defect_z = None
-            if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis']:
+            if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis', 'res_block_uni_dis']:
                 defect_z = torch.randn([batch_gen, G.z_dim], device=opts.device)
             images.append(run_generator(z, c, defect_z))
         images = torch.cat(images)

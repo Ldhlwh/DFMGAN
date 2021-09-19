@@ -69,12 +69,14 @@ def setup_training_loop_kwargs(
     ft = None,
     transfer = None,
     res_st = None,
+    uni_st = None,
     mask_threshold = None,
     lambda_match = None,
     mode_seek = None,
     lambda_ms = None,
     no_round = None,
     tanh_k = None,
+    add_wrong = None,
 ):
     args = dnnlib.EasyDict()
 
@@ -185,7 +187,8 @@ def setup_training_loop_kwargs(
         spec.ema = spec.mb * 10 / 32
 
     args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
-    args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
+    target_D_class = 'training.networks.%s' % ('DiscriminatorUnified' if transfer == 'res_block_uni_dis' else 'Discriminator')
+    args.D_kwargs = dnnlib.EasyDict(class_name=target_D_class, block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
@@ -193,16 +196,18 @@ def setup_training_loop_kwargs(
     args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
     args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
 
-    args.D_match_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
-    args.D_match_kwargs.channel_base = int(spec.fmaps * 32768)
-    args.D_match_kwargs.channel_max = 512
-    args.D_match_kwargs.num_fp16_res = 4
-    args.D_match_kwargs.conv_clamp = 256
-    args.D_match_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
+    if transfer == 'res_block_match_dis':
+        args.D_match_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
+        args.D_match_kwargs.channel_base = int(spec.fmaps * 32768)    # 16384 (= 16 * 1024)
+        args.D_match_kwargs.channel_max = 512
+        args.D_match_kwargs.num_fp16_res = 4
+        args.D_match_kwargs.conv_clamp = 256
+        args.D_match_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
 
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
-    args.D_match_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
+    if transfer == 'res_block_match_dis':
+        args.D_match_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma)
 
     args.total_kimg = spec.kimg
@@ -384,22 +389,30 @@ def setup_training_loop_kwargs(
     else:
         args.ft = ft
 
-    if transfer != 'none':
+    if transfer is None:
+        transfer = 'none'
+    elif transfer != 'none':
         args.ft = 'transfer'
 
     args.G_kwargs.transfer = transfer
     args.loss_kwargs.transfer = transfer
 
-    if transfer in ['res_block', 'res_block_match_dis']:
+    if transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis']:
         if res_st is None:
             args.G_kwargs.synthesis_kwargs.res_st = 64
         else:
             args.G_kwargs.synthesis_kwargs.res_st = int(res_st)
-
-        if mask_threshold is None:
-            args.G_kwargs.mask_threshold = 0.0
+    
+    if transfer == 'res_block_uni_dis':
+        if uni_st is None:
+            args.D_kwargs.uni_st = 64
         else:
-            args.G_kwargs.mask_threshold = float(mask_threshold)
+            args.D_kwargs.uni_st = int(uni_st)
+
+    if mask_threshold is None:
+        args.G_kwargs.mask_threshold = 0.0
+    else:
+        args.G_kwargs.mask_threshold = float(mask_threshold)
 
     if lambda_match is None:
         args.loss_kwargs.lambda_match = 1.0
@@ -417,6 +430,10 @@ def setup_training_loop_kwargs(
     if tanh_k is None:
         tanh_k = 1.0
     args.G_kwargs.synthesis_kwargs.tanh_k = tanh_k
+
+    if add_wrong is None:
+        add_wrong = False
+    args.loss_kwargs.add_wrong = add_wrong
 
     return desc, args
 
@@ -500,15 +517,16 @@ class CommaSeparatedList(click.ParamType):
 # Added by DYX
 @click.option('--ft', help='Finetune mode [default: default]', 
     type=click.Choice(['default', 'ft_map', 'ft_syn', 'ft_syn_2', 'ft_map_syn_2']))
-@click.option('--transfer', help='Extra network for transfer learning [default: none]', type=click.Choice(['none', 'dual_mod', 'res_block', 'res_block_match_dis']))
+@click.option('--transfer', help='Extra network for transfer learning [default: none]', type=click.Choice(['none', 'dual_mod', 'res_block', 'res_block_match_dis', 'res_block_uni_dis']))
 @click.option('--res-st', help='Starting resolution for ResBlock [default: 64]', type=click.Choice(['4', '8', '16', '32', '64', '128', '256']), metavar='INT')
+@click.option('--uni-st', help='Starting resolution for UnifiedBlock of Discriminator [default: 64]', type=click.Choice(['4', '8', '16', '32', '64', '128', '256']), metavar='INT')
 @click.option('--mask-threshold', help='The threshold value between mask/non-mask regions [default: 0.0]', type=float)
 @click.option('--lambda-match', help='Gmain_loss = loss_from_D + lambda * loss_from_D_match [default: 1.0]', type=float)
 @click.option('--mode-seek', help='Method for mode seeking loss [default: none]', type=click.Choice(['none', 'w/mask']))
 @click.option('--lambda-ms', help='loss_Gmain + lambda * loss_MS [default: 1.0]', type=float)
 @click.option('--no-round', help='Use a soft mask if setting True [default: False]', type=bool, metavar='BOOL', is_flag = True)
 @click.option('--tanh-k', help='mask = tanh(k * raw_mask) [default: 1.0]', type=float)
-
+@click.option('--add-wrong', help='Add mismatched pairs of images and masks to D_match [default: False]', type=bool, metavar='BOOL', is_flag = True)
 
 def main(ctx, outdir, dry_run, **config_kwargs):
     """Train a GAN using the techniques described in the paper

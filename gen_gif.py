@@ -62,10 +62,13 @@ def generate_gif(
     assert network_pkl.split('/')[2].startswith('000')
     assert network_pkl.endswith('pkl')
 
+    run_type = network_pkl.split('/')[0].split('_runs')[0]
+    save_type = 'gifs_' + run_type
+
     if output is None:
         kimg = network_pkl.split('/')[-1].split('.')[0].split('-')[-1]
         kimg = int(kimg)
-        output = os.path.join('gifs', '%s_%d%s.gif' % (network_pkl.split('/')[1], kimg, '_fc' if fix_content else ''))
+        output = os.path.join(save_type, '%s_%d%s.gif' % (network_pkl.split('/')[1], kimg, '_fc' if fix_content else ''))
         print('Will save to %s' % output)
 
     outdir = os.path.dirname(output)
