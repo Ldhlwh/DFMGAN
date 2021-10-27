@@ -316,36 +316,14 @@ class ToRGBLayer(torch.nn.Module):
         self.weight = torch.nn.Parameter(torch.randn([out_channels, in_channels, kernel_size, kernel_size]).to(memory_format=memory_format))
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
         self.weight_gain = 1 / np.sqrt(in_channels * (kernel_size ** 2))
+        self.kernel_size = kernel_size
 
     def forward(self, x, w, fused_modconv=True):
         styles = self.affine(w) * self.weight_gain
-        x = modulated_conv2d(x=x, weight=self.weight, styles=styles, demodulate=False, fused_modconv=fused_modconv)
+        auto_padding = self.kernel_size // 2
+        x = modulated_conv2d(x=x, weight=self.weight, styles=styles, demodulate=False, fused_modconv=fused_modconv, padding = auto_padding)
         x = bias_act.bias_act(x, self.bias.to(x.dtype), clamp=self.conv_clamp)
         return x
-
-
-@persistence.persistent_class
-class ToMaskLayer(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, w_dim, kernel_size=1, conv_clamp=None, channels_last=False):
-        super().__init__()
-        num_channels = [in_channels, 64, 16, 4, out_channels]
-        self.conv_clamp = conv_clamp
-        self.padding = kernel_size // 2
-        self.affine = torch.nn.ModuleList([FullyConnectedLayer(w_dim, num_channels[i], bias_init=1) for i in range(len(num_channels) - 1)])
-        memory_format = torch.channels_last if channels_last else torch.contiguous_format
-        self.weight = torch.nn.ParameterList([torch.nn.Parameter(torch.randn([num_channels[i + 1], num_channels[i], kernel_size, kernel_size]).to(memory_format=memory_format)) for i in range(len(num_channels) - 1)])
-        self.bias = torch.nn.ParameterList([torch.nn.Parameter(torch.zeros([num_channels[i + 1]])) for i in range(len(num_channels) - 1)])
-        self.weight_gain = [1 / np.sqrt(num_channels[i] * (kernel_size ** 2)) for i in range(len(num_channels) - 1)]
-
-    def forward(self, x, w, fused_modconv=True):
-        for i in range(len(self.weight)):
-            styles = self.affine[i](w) * self.weight_gain[i]            
-            x = modulated_conv2d(x = x, weight=self.weight[i], styles=styles, padding = self.padding, demodulate=False, fused_modconv=fused_modconv)
-            x = bias_act.bias_act(x, self.bias[i].to(x.dtype), clamp=self.conv_clamp)
-            if i < len(self.weight) - 1:
-                x = torch.relu(x)
-        return x
-
 
 #----------------------------------------------------------------------------
 
@@ -360,7 +338,9 @@ class SynthesisBlock(torch.nn.Module):
         is_last,                            # Is this the last block?
         torgb_type, # 'none', 'rgb', 'gen_mask', 'upsample_mask'
         no_round,
+        tanh_mask,
         tanh_k,
+        img_resolution = None,
         mask_threshold = None,
         architecture        = 'skip',       # Architecture: 'orig', 'skip', 'resnet'.
         resample_filter     = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
@@ -386,7 +366,10 @@ class SynthesisBlock(torch.nn.Module):
         self.torgb_type = torgb_type
         self.mask_threshold = mask_threshold
         self.no_round = no_round
+        self.tanh_mask = tanh_mask
         self.tanh_k = tanh_k
+        self.img_resolution = img_resolution
+        self.upsample_pad = torch.nn.ReplicationPad2d(padding = 1)
 
         if in_channels == 0:
             self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
@@ -400,7 +383,7 @@ class SynthesisBlock(torch.nn.Module):
             conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
         self.num_conv += 1
 
-        if (is_last or architecture == 'skip') and (torgb_type in ['rgb', 'gen_mask']):
+        if (is_last or architecture == 'skip') and (torgb_type in ['rgb', 'gen_mask', 'gen_high_res_mask']):
             if torgb_type == 'rgb':
                 self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
                         conv_clamp=conv_clamp, channels_last=self.channels_last)
@@ -408,17 +391,28 @@ class SynthesisBlock(torch.nn.Module):
             # All ToRGB
             elif torgb_type == 'gen_mask':
                 self.torgb = ToRGBLayer(out_channels, 1, w_dim=w_dim,
-                        conv_clamp=conv_clamp, channels_last=self.channels_last)
+                       conv_clamp=conv_clamp, channels_last=self.channels_last)
 
-            # ToMask            
-            # elif torgb_type == 'gen_mask':
-            #     self.torgb = ToMaskLayer(out_channels, 1, w_dim=w_dim, kernel_size = 3,
-            #             conv_clamp=conv_clamp, channels_last=self.channels_last)
+
+            elif torgb_type == 'gen_high_res_mask':
+                up_times = self.img_resolution // self.resolution
+                self.conv_mask = SynthesisLayer(out_channels, out_channels // 8, w_dim=w_dim, resolution=resolution * up_times, up = up_times,
+                    conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
+                self.num_conv += 1
+                self.torgb = ToRGBLayer(out_channels // 8, 1, w_dim=w_dim,
+                        conv_clamp=conv_clamp, kernel_size = 3, channels_last=self.channels_last)
+
             self.num_torgb += 1
 
         if in_channels != 0 and architecture == 'resnet':
             self.skip = Conv2dLayer(in_channels, out_channels, kernel_size=1, bias=False, up=2,
                 resample_filter=resample_filter, channels_last=self.channels_last)
+
+    def padded_upsample(self, mask, filter):
+        mask = self.upsample_pad(mask)
+        mask = upfirdn2d.upsample2d(mask, filter)
+        mask = mask[:, :, 2:-2, 2:-2]
+        return mask
 
     def forward(self, x, img, ws, res_x = None, force_fp32=False, fused_modconv=None, **layer_kwargs):
         misc.assert_shape(ws, [None, self.num_conv + self.num_torgb, self.w_dim])
@@ -447,39 +441,57 @@ class SynthesisBlock(torch.nn.Module):
             x = y.add_(x)
         else:
             x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            if self.torgb_type == 'gen_high_res_mask':
+                x_mask = self.conv_mask(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
         # ResBlock exists
         if res_x is not None:
             assert x.dtype == res_x.dtype and x.shape == res_x.shape
             x = x + res_x
+            #x = torch.where(res_x == 0.0, x, res_x)
 
         # ToRGB.
         if img is not None:
-            misc.assert_shape(img, [None, self.img_channels if self.torgb_type == 'rgb' else 1, self.resolution // 2, self.resolution // 2])
-            img = upfirdn2d.upsample2d(img, self.resample_filter)
+            misc.assert_shape(img, [None, self.img_channels if self.torgb_type == 'rgb' else 1, 
+                self.img_resolution if self.torgb_type == 'downsample_mask' else self.resolution // 2, 
+                self.img_resolution if self.torgb_type == 'downsample_mask' else self.resolution // 2])
+            if self.torgb_type == 'downsample_mask':
+                ori_img = img
+                if self.resolution < self.img_resolution:
+                    img = upfirdn2d.downsample2d(ori_img, self.resample_filter, down = self.img_resolution // self.resolution)
+            else:
+                # img = upfirdn2d.upsample2d(img, self.resample_filter)
+                if self.torgb_type == 'rgb':
+                    img = upfirdn2d.upsample2d(img, self.resample_filter)
+                elif self.torgb_type == 'upsample_mask':
+                    # img = torch.nn.functional.interpolate(img, scale_factor = 2, mode = 'bilinear', align_corners = False)
+                    img = self.padded_upsample(img, self.resample_filter)
  
-        if (self.is_last or self.architecture == 'skip') and (self.torgb_type in ['rgb', 'gen_mask']):
-            y = self.torgb(x, next(w_iter), fused_modconv=fused_modconv)
+        if (self.is_last or self.architecture == 'skip') and (self.torgb_type in ['rgb', 'gen_mask', 'gen_high_res_mask']):
+            y = self.torgb(x_mask if self.torgb_type == 'gen_high_res_mask' else x, next(w_iter), fused_modconv=fused_modconv)
             y = y.to(dtype=torch.float32 if self.torgb_type == 'rgb' else torch.float16, memory_format=torch.contiguous_format)
             img = img.add_(y) if img is not None else y
-            if self.torgb_type == 'gen_mask':
-                img = torch.tanh(self.tanh_k * img)
+            if self.torgb_type == 'gen_high_res_mask':
+                ori_img = img
+                if self.resolution < self.img_resolution:
+                    img = upfirdn2d.downsample2d(ori_img, self.resample_filter, down = self.img_resolution // self.resolution)
+            if self.torgb_type in ['gen_mask', 'gen_high_res_mask']:
+                if self.tanh_mask == 'early':
+                    img = torch.tanh(self.tanh_k * img)
 
-        if self.torgb_type in ['gen_mask', 'upsample_mask']:
+        if self.torgb_type in ['gen_mask', 'gen_high_res_mask', 'upsample_mask', 'downsample_mask']:
             assert(x.shape[0] == img.shape[0] and img.shape[1] == 1 and x.shape[2] == img.shape[2] and x.shape[3] == img.shape[3])
             if self.no_round:
                 x = x * (img / 2.0 + 0.5)
             else:
                 x = x * (img >= self.mask_threshold)
-            
-
 
         assert x.dtype == dtype
         if self.torgb_type == 'none':
             return x
         assert img.dtype == (torch.float32 if self.torgb_type == 'rgb' else torch.float16)
-        return x, img
+        return x, ori_img if self.torgb_type in ['gen_high_res_mask', 'downsample_mask'] else img
 
 #----------------------------------------------------------------------------
 
@@ -492,6 +504,7 @@ class SynthesisNetwork(torch.nn.Module):
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
+        high_res_mask = False,
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -543,6 +556,7 @@ class SynthesisResNet(torch.nn.Module):
         img_resolution,             # Output image resolution.
         img_channels,               # Number of color channels.
         res_st,
+        high_res_mask = False,
         mask_threshold = 0.0,
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
@@ -559,6 +573,7 @@ class SynthesisResNet(torch.nn.Module):
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
         self.res_st = res_st
+        self.high_res_mask = high_res_mask
 
         self.num_ws = 0
         self.num_defect_ws = 0
@@ -574,8 +589,12 @@ class SynthesisResNet(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
             if res >= self.res_st:
-                res_block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
-                    img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, torgb_type = 'gen_mask' if res == self.res_st else 'upsample_mask', mask_threshold=mask_threshold, **block_kwargs)
+                if self.high_res_mask:
+                    res_block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res, img_resolution = img_resolution,
+                        img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, torgb_type = 'gen_high_res_mask' if res == self.res_st else 'downsample_mask', mask_threshold=mask_threshold, **block_kwargs)
+                else:
+                    res_block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
+                        img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, torgb_type = 'gen_mask' if res == self.res_st else 'upsample_mask', mask_threshold=mask_threshold, **block_kwargs)
                 self.num_defect_ws += res_block.num_conv
                 if res == self.res_st:
                     self.num_defect_ws += 1

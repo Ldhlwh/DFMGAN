@@ -4,11 +4,12 @@ __pycache__/
 /cmp*/
 /data/
 /docs/
-/gifs*/
-/*_runs*/
+/gifs/
+/runs/
+/pkls/
 
 *png
 *.pth
 *.pkl
 *.gif
-/test.py
+/test*

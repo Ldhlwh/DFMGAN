@@ -21,7 +21,7 @@ class Loss:
 #----------------------------------------------------------------------------
 
 class StyleGAN2Loss(Loss):
-    def __init__(self, device, G_mapping, G_synthesis, D, lambda_match, lambda_ms, mode_seek, D_match = None, augment_pipe=None, G_defect_mapping = None, style_mixing_prob=0.9, r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, 
+    def __init__(self, device, G_mapping, G_synthesis, D, lambda_match, lambda_ms, mode_seek, tanh_mask, tanh_k, D_match = None, augment_pipe=None, G_defect_mapping = None, style_mixing_prob=0.9, r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, 
             transfer=None, add_wrong = False):
         super().__init__()
         self.device = device
@@ -45,6 +45,8 @@ class StyleGAN2Loss(Loss):
         self.lambda_ms = lambda_ms
         self.mode_seek = mode_seek
         self.add_wrong = add_wrong
+        self.tanh_mask = tanh_mask
+        self.tanh_k = tanh_k
 
         self.phases_printed = False
 
@@ -83,13 +85,15 @@ class StyleGAN2Loss(Loss):
                     img = self.G_synthesis(ws, defect_ws, output_mask = output_mask)
                 input_list.append(defect_ws)
 
-                if mode_seek == 'w/mask':
+                if mode_seek in ['w/mask', 'w/img', 'z/mask']:
                     half_batch = ws.shape[0] // 2
-                    _, half_mask = self.G_synthesis(ws[:half_batch], defect_ws[half_batch:], output_mask = True)
+                    half_img, half_mask = self.G_synthesis(ws[:half_batch], defect_ws[half_batch:], output_mask = True)
         
         if transfer in ['res_block_match_dis', 'res_block_uni_dis'] and output_mask:
-            if mode_seek == 'w/mask':
+            if mode_seek in ['w/mask', 'z/mask']:
                 return img, mask, half_mask, input_list
+            elif mode_seek == 'w/img':
+                return img, mask, half_img, input_list
             return img, mask, input_list
         else:
             return img, input_list
@@ -141,8 +145,10 @@ class StyleGAN2Loss(Loss):
                 if self.transfer in ['res_block_match_dis', 'res_block_uni_dis']:
                     if self.mode_seek == 'none':
                         gen_img, gen_mask, inputs = self.run_G(gen_z, gen_c, sync=(sync and not do_Gpl), defect_z = gen_defect_z, transfer = self.transfer, output_mask = True) # May get synced by Gpl.                       
-                    elif self.mode_seek == 'w/mask':
+                    elif self.mode_seek in ['w/mask', 'z/mask']:
                         gen_img, gen_mask, gen_half_mask, inputs = self.run_G(gen_z, gen_c, sync=(sync and not do_Gpl), defect_z = gen_defect_z, transfer = self.transfer, output_mask = True, mode_seek = self.mode_seek) # May get synced by Gpl.                       
+                    elif self.mode_seek == 'w/img':
+                        gen_img, gen_mask, gen_half_img, inputs = self.run_G(gen_z, gen_c, sync=(sync and not do_Gpl), defect_z = gen_defect_z, transfer = self.transfer, output_mask = True, mode_seek = self.mode_seek) # May get synced by Gpl.                       
                 else:
                     gen_img, inputs = self.run_G(gen_z, gen_c, sync=(sync and not do_Gpl), defect_z = gen_defect_z, transfer = self.transfer) # May get synced by Gpl.
 
@@ -154,23 +160,35 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
                 if self.transfer == 'res_block_match_dis':
-                    #gen_mask[gen_mask >= mask_threshold] = 1.0
-                    #gen_mask = torch.tanh(gen_mask)
-                    #gen_mask[gen_mask < mask_threshold] = -1.0
+
+                    if self.tanh_mask == 'late':
+                        gen_mask = torch.tanh(self.tanh_k * gen_mask)
+                        if self.mode_seek in ['w/mask', 'z/mask']:
+                            gen_half_mask = torch.tanh(self.tanh_k * gen_half_mask)
+
                     gen_img_mask = torch.cat([gen_img, gen_mask], dim = 1)
                     gen_match_logits = self.run_D_match(gen_img_mask, gen_c, sync=False)
                     training_stats.report('Loss/scores/fake_match', gen_match_logits)
                     training_stats.report('Loss/signs/fake_match', gen_match_logits.sign())
                     loss_Gmain = loss_Gmain + self.lambda_match * torch.nn.functional.softplus(-gen_match_logits)
 
-                if self.mode_seek == 'w/mask':
+                if self.mode_seek in ['w/mask', 'w/img', 'z/mask']:
                     assert len(inputs) == 2
                     assert gen_z.shape[0] % 2 == 0
                     half_batch_size = gen_z.shape[0] // 2
-                    w = inputs[1]
-                    w1, w2 = w[:half_batch_size], w[half_batch_size:]
-                    mask1, mask2 = gen_mask[:half_batch_size], gen_half_mask
-                    loss_MS = (w1 - w2).abs().mean() / (mask1 - mask2).abs().mean()
+                    if self.mode_seek in ['w/mask', 'w/img']:
+                        w = inputs[1]
+                        w1, w2 = w[:half_batch_size], w[half_batch_size:]
+                        if self.mode_seek == 'w/mask':
+                            mask1, mask2 = gen_mask[:half_batch_size], gen_half_mask
+                            loss_MS = (w1 - w2).abs().mean() / (mask1 - mask2).abs().mean()
+                        elif self.mode_seek == 'w/img':
+                            img1, img2 = gen_img[:half_batch_size], gen_half_img
+                            loss_MS = (w1 - w2).abs().mean() / (img1 - img2).abs().mean()
+                    elif self.mode_seek == 'z/mask':
+                        z1, z2 = gen_defect_z[:half_batch_size], gen_defect_z[half_batch_size:]
+                        mask1, mask2 = gen_mask[:half_batch_size], gen_half_mask
+                        loss_MS = (z1 - z2).abs().mean() / (mask1 - mask2).abs().mean()
                     training_stats.report('Loss/mode_seek', loss_MS)
 
                 training_stats.report('Loss/G/loss', loss_Gmain)
@@ -250,9 +268,10 @@ class StyleGAN2Loss(Loss):
         if do_D_matchmain:
             with torch.autograd.profiler.record_function('D_matchgen_forward'):
                 gen_img, gen_mask, _gen_ws = self.run_G(gen_z, gen_c, sync=False, defect_z = gen_defect_z, transfer = self.transfer, output_mask = True)
-                #gen_mask[gen_mask >= mask_threshold] = 1.0
-                #gen_mask = torch.tanh(gen_mask)
-                #gen_mask[gen_mask < mask_threshold] = -1.0
+
+                if self.tanh_mask == 'late':
+                    gen_mask = torch.tanh(self.tanh_k * gen_mask)
+                    
                 gen_img_mask = torch.cat([gen_img, gen_mask], dim = 1)
                 gen_logits = self.run_D_match(gen_img_mask, gen_c, sync=False) # Gets synced by loss_Dreal.
                 training_stats.report('Loss/scores/fake_match', gen_logits)
