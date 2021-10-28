@@ -465,7 +465,6 @@ class SynthesisBlock(torch.nn.Module):
                 if self.torgb_type == 'rgb':
                     img = upfirdn2d.upsample2d(img, self.resample_filter)
                 elif self.torgb_type == 'upsample_mask':
-                    # img = torch.nn.functional.interpolate(img, scale_factor = 2, mode = 'bilinear', align_corners = False)
                     img = self.padded_upsample(img, self.resample_filter)
  
         if (self.is_last or self.architecture == 'skip') and (self.torgb_type in ['rgb', 'gen_mask', 'gen_high_res_mask']):

@@ -17,6 +17,7 @@ import dnnlib
 import numpy as np
 import PIL.Image
 import torch
+from tqdm import tqdm
 
 import legacy
 
@@ -43,6 +44,8 @@ def num_range(s: str) -> List[int]:
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
 @click.option('--output', help='Where to save the output images', type=str, required=True, metavar='FILE')
+@click.option('--cmp', help='Generate images for comparison', type=bool, metavar='BOOL', is_flag=True)
+
 def generate_images(
     ctx: click.Context,
     network_pkl: str,
@@ -51,7 +54,8 @@ def generate_images(
     noise_mode: str,
     output: str,
     class_idx: Optional[int],
-    projected_w: Optional[str]
+    projected_w: Optional[str],
+    cmp: bool,
 ):
     """Generate images using pretrained network pickle.
 
@@ -100,7 +104,10 @@ def generate_images(
         return
 
     if seeds is None:
-        seeds = [x for x in range(10)]
+        if cmp:
+            seeds = [x for x in range(10)]
+        else:
+            seeds = [x for x in range(100)]
         #ctx.fail('--seeds option is required when not using --projected-w')
 
     # Labels.
@@ -114,31 +121,65 @@ def generate_images(
             print ('warn: --class=lbl ignored when running on an unconditional network')
 
     # Generate images.
-    canvas = []
-    for seed_idx, seed in enumerate(seeds):
-        print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
-        z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-        transfer = (G.transfer != 'none')
-        if transfer:
-            defect_z = torch.from_numpy(np.random.RandomState(seed + len(seeds)).randn(1, G.z_dim)).to(device)
-            ws = G.mapping(z, None)
-            defect_ws = G.defect_mapping(defect_z, label, truncation_psi=truncation_psi)
-            if G.transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis']:
-                img, mask = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = True, fix_residual_to_zero = False)
-                good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = False, fix_residual_to_zero = True)
-                img = torch.cat([good_img, img, mask.repeat((1, 3, 1, 1))], dim = 2)
+    os.makedirs(output)
+    if cmp:
+        canvas = []
+        for seed_idx, seed in tqdm(enumerate(seeds)):
+            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+            if hasattr(G, 'transfer'):
+                transfer = (G.transfer != 'none')
+            else: 
+                transfer = False
+
+            if transfer:
+                defect_z = torch.from_numpy(np.random.RandomState(seed + len(seeds)).randn(1, G.z_dim)).to(device)
+                ws = G.mapping(z, None)
+                defect_ws = G.defect_mapping(defect_z, label, truncation_psi=truncation_psi)
+                if G.transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis']:
+                    img, mask = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = True, fix_residual_to_zero = False)
+                    good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = False, fix_residual_to_zero = True)
+                    mask = torch.where(mask >= 0.0, 1.0, -1.0)
+                    img = torch.cat([good_img, img, mask.repeat((1, 3, 1, 1))], dim = 2)
+                else:
+                    img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = False)
+                    good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = True)
+                    mask = torch.where(mask >= 0.0, 1.0, -1.0)
+                    img = torch.cat([good_img, img], dim = 2)
             else:
-                img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = False)
-                good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = True)
-                img = torch.cat([good_img, img], dim = 2)
-        else:
-            img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
-        canvas.append(img)
-    img = torch.cat(canvas, dim = 3)
-    img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-    if not output.endswith('.png'):
-        output += '.png'
-    PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{output}')
+                img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+            canvas.append(img)
+        img = torch.cat(canvas, dim = 3)
+        img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
+        if not output.endswith('.png'):
+            output += '.png'
+        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{output}')
+
+    else:
+        for seed_idx, seed in tqdm(enumerate(seeds)):
+            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+            if hasattr(G, 'transfer'):
+                transfer = (G.transfer != 'none')
+            else: 
+                transfer = False
+            mask = None
+            if transfer:
+                defect_z = torch.from_numpy(np.random.RandomState(seed + len(seeds)).randn(1, G.z_dim)).to(device)
+                ws = G.mapping(z, None)
+                defect_ws = G.defect_mapping(defect_z, label, truncation_psi=truncation_psi)
+                if G.transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis']:
+                    img, mask = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = True, fix_residual_to_zero = False)
+                    mask = torch.where(mask >= 0.0, 1.0, -1.0).repeat(1, 3, 1, 1)
+                else:
+                    img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = False)
+                    mask = torch.where(mask >= 0.0, 1.0, -1.0).repeat(1, 3, 1, 1)
+            else:
+                img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+
+            img = ((img.permute(0, 2, 3, 1) + 1.0) * 127.5).clamp(0, 255).to(torch.uint8)
+            PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(os.path.join(output, '%d_img.png' % seed_idx))
+            if mask is not None:
+                mask = ((mask.permute(0, 2, 3, 1) + 1.0) * 127.5).clamp(0, 255).to(torch.uint8)
+                PIL.Image.fromarray(mask[0].cpu().numpy(), 'RGB').save(os.path.join(output, '%d_mask.png' % seed_idx))
 
 
 #----------------------------------------------------------------------------
