@@ -22,7 +22,7 @@ class Loss:
 
 class StyleGAN2Loss(Loss):
     def __init__(self, device, G_mapping, G_synthesis, D, lambda_match, lambda_ms, mode_seek, tanh_mask, tanh_k, D_match = None, augment_pipe=None, G_defect_mapping = None, style_mixing_prob=0.9, r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, 
-            transfer=None, add_wrong = False):
+            transfer=None):
         super().__init__()
         self.device = device
         self.G_mapping = G_mapping
@@ -44,7 +44,6 @@ class StyleGAN2Loss(Loss):
         self.lambda_match = lambda_match
         self.lambda_ms = lambda_ms
         self.mode_seek = mode_seek
-        self.add_wrong = add_wrong
         self.tanh_mask = tanh_mask
         self.tanh_k = tanh_k
 
@@ -294,20 +293,9 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/scores/real_match', real_logits)
                 training_stats.report('Loss/signs/real_match', real_logits.sign())
 
-                # add wrong
-                if self.add_wrong:
-                    assert real_mask_tmp.shape[0] % 2 == 0
-                    wrong_mask_tmp = real_mask_tmp.flip(0)
-                    wrong_img_mask_tmp = torch.cat([real_img_tmp, wrong_mask_tmp], dim = 1)
-                    wrong_logits = self.run_D_match(wrong_img_mask_tmp, real_c, sync=sync)
-                    training_stats.report('Loss/scores/wrong_match', wrong_logits)
-                    training_stats.report('Loss/signs/wrong_match', wrong_logits.sign())
-
                 loss_D_matchreal = 0
                 if do_D_matchmain:
                     loss_D_matchreal = torch.nn.functional.softplus(-real_logits) # -log(sigmoid(real_logits))
-                    if self.add_wrong:
-                        loss_D_matchreal = loss_D_matchreal + torch.nn.functional.softplus(wrong_logits)
                     training_stats.report('Loss/D_match/loss', loss_D_matchgen + loss_D_matchreal)
 
                 loss_D_matchr1 = 0

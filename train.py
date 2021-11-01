@@ -76,8 +76,6 @@ def setup_training_loop_kwargs(
     lambda_ms = None,
     no_round = None,
     tanh_k = None,
-    add_wrong = None,
-    high_res_mask = None,
     tanh_mask = None,
     dmatch_scale = None,
 ):
@@ -444,15 +442,6 @@ def setup_training_loop_kwargs(
     args.G_kwargs.synthesis_kwargs.tanh_mask = args.loss_kwargs.tanh_mask = tanh_mask
     args.G_kwargs.synthesis_kwargs.tanh_k = args.loss_kwargs.tanh_k = tanh_k
 
-
-    if add_wrong is None:
-        add_wrong = False
-    args.loss_kwargs.add_wrong = add_wrong
-
-    if high_res_mask is None:
-        high_res_mask = False
-    args.G_kwargs.synthesis_kwargs.high_res_mask = high_res_mask
-
     return desc, args
 
 #----------------------------------------------------------------------------
@@ -540,14 +529,12 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--uni-st', help='Starting resolution for UnifiedBlock of Discriminator [default: 64]', type=click.Choice(['4', '8', '16', '32', '64', '128', '256']), metavar='INT')
 @click.option('--mask-threshold', help='The threshold value between mask/non-mask regions [default: 0.0]', type=float)
 @click.option('--lambda-match', help='Gmain_loss = loss_from_D + lambda * loss_from_D_match [default: 1.0]', type=float)
-@click.option('--mode-seek', help='Method for mode seeking loss [default: none]', type=click.Choice(['none', 'w/mask', 'w/img', 'z/mask']))
+@click.option('--mode-seek', help='Method for mode seeking loss [default: w/mask]', default='w/mask', type=click.Choice(['none', 'w/mask', 'w/img', 'z/mask']))
 @click.option('--lambda-ms', help='loss_Gmain + lambda * loss_MS [default: 1.0]', type=float)
 @click.option('--no-round', help='Use a soft mask if setting True [default: False]', type=bool, metavar='BOOL', is_flag = True)
-@click.option('--tanh-k', help='mask = tanh(k * raw_mask) [default: 1.0]', type=float)
-@click.option('--add-wrong', help='Add mismatched pairs of images and masks to D_match [default: False]', type=bool, metavar='BOOL', is_flag = True)
-@click.option('--high-res-mask', help='Generate high resolution masks and then downsample [default: False]', type=bool, metavar='BOOL', is_flag = True)
-@click.option('--tanh-mask', help='Add tanh() to mask [default: none]', type=click.Choice(['none', 'late']))
-@click.option('--dmatch-scale', help='D_match channel base / channel max [default: 16384/512]', type=click.Choice(['16384/512', '8192/256', '4096/128']))
+@click.option('--tanh-k', help='mask = tanh(k * raw_mask) [default: 1.0]', default=10.0, type=float)
+@click.option('--tanh-mask', help='Add tanh() to mask [default: none]', default='late', type=click.Choice(['none', 'late']))
+@click.option('--dmatch-scale', help='D_match channel base / channel max [default: 16384/512]', default='4096/128', type=click.Choice(['16384/512', '8192/256', '4096/128']))
 
 
 
