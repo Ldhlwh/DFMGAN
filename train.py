@@ -532,9 +532,9 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mode-seek', help='Method for mode seeking loss [default: w/mask]', default='w/mask', type=click.Choice(['none', 'w/mask', 'w/img', 'z/mask']))
 @click.option('--lambda-ms', help='loss_Gmain + lambda * loss_MS [default: 1.0]', type=float)
 @click.option('--no-round', help='Use a soft mask if setting True [default: False]', type=bool, metavar='BOOL', is_flag = True)
-@click.option('--tanh-k', help='mask = tanh(k * raw_mask) [default: 1.0]', default=10.0, type=float)
-@click.option('--tanh-mask', help='Add tanh() to mask [default: none]', default='late', type=click.Choice(['none', 'late']))
-@click.option('--dmatch-scale', help='D_match channel base / channel max [default: 16384/512]', default='4096/128', type=click.Choice(['16384/512', '8192/256', '4096/128']))
+@click.option('--tanh-k', help='mask = tanh(k * raw_mask) [default: 10.0]', default=10.0, type=float)
+@click.option('--tanh-mask', help='Add tanh() to mask [default: late]', default='late', type=click.Choice(['none', 'late']))
+@click.option('--dmatch-scale', help='D_match channel base / channel max [default: 4096/128]', default='4096/128', type=click.Choice(['16384/512', '8192/256', '4096/128']))
 
 
 
