@@ -427,7 +427,7 @@ def setup_training_loop_kwargs(
     else:
         args.loss_kwargs.lambda_match = float(lambda_match)
 
-    args.loss_kwargs.mode_seek = 'none' if mode_seek is None else mode_seek
+    args.loss_kwargs.mode_seek = 'none' if (transfer == 'none' or mode_seek is None) else mode_seek
     args.loss_kwargs.lambda_ms = 1.0 if lambda_ms is None else float(lambda_ms)
 
     if no_round is None:
