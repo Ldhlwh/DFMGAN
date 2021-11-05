@@ -104,6 +104,12 @@ def kid5k_full(opts):
     return dict(kid5k_full=kid)
 
 @register_metric
+def kid_between_dir(opts):
+    opts.dataset_kwargs.update(max_size=None, xflip=False)
+    kid = kernel_inception_distance.compute_kid_between_dir(opts, max_real=1000000, num_gen=5000, num_subsets=100, max_subset_size=1000)
+    return dict(kid_between_dir=kid)
+
+@register_metric
 def pr50k3_full(opts):
     opts.dataset_kwargs.update(max_size=None, xflip=False)
     precision, recall = precision_recall.compute_pr(opts, max_real=200000, num_gen=50000, nhood_size=3, row_batch_size=10000, col_batch_size=10000)

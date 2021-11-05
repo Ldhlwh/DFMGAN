@@ -45,32 +45,34 @@ def subprocess_fn(rank, args, temp_dir):
         custom_ops.verbosity = 'none'
 
     # Print network summary.
+    G = None
     device = torch.device('cuda', rank)
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
-    G = copy.deepcopy(args.G).eval().requires_grad_(False).to(device)
+    if not hasattr(args, 'dataset2_kwargs'):
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        G = copy.deepcopy(args.G).eval().requires_grad_(False).to(device)
 
-    '''
-    if rank == 0 and args.verbose:
-        z = torch.empty([1, G.z_dim], device=device)
-        c = torch.empty([1, G.c_dim], device=device)
-        misc.print_module_summary(G, [z, c])
-    '''
+        '''
+        if rank == 0 and args.verbose:
+            z = torch.empty([1, G.z_dim], device=device)
+            c = torch.empty([1, G.c_dim], device=device)
+            misc.print_module_summary(G, [z, c])
+        '''
 
-    if rank == 0 and args.verbose:
-        z = torch.empty([1, G.z_dim], device=device)
-        c = torch.empty([1, G.c_dim], device=device)
-        input_list = [z, c]
-        if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis', 'res_block_uni_dis']:
-            defect_z = torch.empty([1, G.z_dim], device=device)
-            input_list.append(defect_z)
+        if rank == 0 and args.verbose:
+            z = torch.empty([1, G.z_dim], device=device)
+            c = torch.empty([1, G.c_dim], device=device)
+            input_list = [z, c]
+            if G.transfer in ['dual_mod', 'res_block', 'res_block_match_dis', 'res_block_uni_dis']:
+                defect_z = torch.empty([1, G.z_dim], device=device)
+                input_list.append(defect_z)
 
-        if G.transfer in ['res_block_match_dis', 'res_block_uni_dis']:
-            input_list.append(True)
-            misc.print_module_summary(G, input_list)
-        else:
-            misc.print_module_summary(G, input_list)
+            if G.transfer in ['res_block_match_dis', 'res_block_uni_dis']:
+                input_list.append(True)
+                misc.print_module_summary(G, input_list)
+            else:
+                misc.print_module_summary(G, input_list)
 
 
     # Calculate each metric.
@@ -79,7 +81,7 @@ def subprocess_fn(rank, args, temp_dir):
             print(f'Calculating {metric}...')
         progress = metric_utils.ProgressMonitor(verbose=args.verbose)
         result_dict = metric_main.calc_metric(metric=metric, G=G, dataset_kwargs=args.dataset_kwargs,
-            num_gpus=args.num_gpus, rank=rank, device=device, progress=progress)
+            num_gpus=args.num_gpus, rank=rank, device=device, progress=progress, dataset2_kwargs=args.dataset2_kwargs if hasattr(args, 'dataset2_kwargs') else {})
         if rank == 0:
             metric_main.report_metric(result_dict, run_dir=args.run_dir, snapshot_pkl=args.network_pkl)
         if rank == 0 and args.verbose:
@@ -106,14 +108,15 @@ class CommaSeparatedList(click.ParamType):
 
 @click.command()
 @click.pass_context
-@click.option('network_pkl', '--network', help='Network pickle filename or URL', metavar='PATH', required=True)
+@click.option('network_pkl', '--network', help='Network pickle filename or URL', metavar='PATH')
 @click.option('--metrics', help='Comma-separated list or "none"', type=CommaSeparatedList(), default='fid5k_full,kid5k_full,is5k', show_default=True)
 @click.option('--data', help='Dataset to evaluate metrics against (directory or zip) [default: same as training data]', metavar='PATH')
+@click.option('--data2', help='Dataset2 to evaluate metrics against (directory or zip)', metavar='PATH')
 @click.option('--mirror', help='Whether the dataset was augmented with x-flips during training [default: look up]', type=bool, metavar='BOOL')
 @click.option('--gpus', help='Number of GPUs to use', type=int, default=1, metavar='INT', show_default=True)
 @click.option('--verbose', help='Print optional information', type=bool, default=True, metavar='BOOL', show_default=True)
 
-def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
+def calc_metrics(ctx, network_pkl, metrics, data, data2, mirror, gpus, verbose):
     """Calculate quality metrics for previous training run or pretrained network pickle.
 
     Examples:
@@ -158,13 +161,14 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
         ctx.fail('--gpus must be at least 1')
 
     # Load network.
-    if not dnnlib.util.is_url(network_pkl, allow_file_urls=True) and not os.path.isfile(network_pkl):
-        ctx.fail('--network must point to a file or URL')
-    if args.verbose:
-        print(f'Loading network from "{network_pkl}"...')
-    with dnnlib.util.open_url(network_pkl, verbose=args.verbose) as f:
-        network_dict = legacy.load_network_pkl(f)
-        args.G = network_dict['G_ema'] # subclass of torch.nn.Module
+    if network_pkl is not None:
+        if not dnnlib.util.is_url(network_pkl, allow_file_urls=True) and not os.path.isfile(network_pkl):
+            ctx.fail('--network must point to a file or URL')
+        if args.verbose:
+            print(f'Loading network from "{network_pkl}"...')
+        with dnnlib.util.open_url(network_pkl, verbose=args.verbose) as f:
+            network_dict = legacy.load_network_pkl(f)
+            args.G = network_dict['G_ema'] # subclass of torch.nn.Module
 
     # Initialize dataset options.
     if data is not None:
@@ -174,9 +178,16 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
     else:
         ctx.fail('Could not look up dataset options; please specify --data')
 
+    if data2 is not None:
+        args.dataset2_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data2)
+
     # Finalize dataset options.
-    args.dataset_kwargs.resolution = args.G.img_resolution
-    args.dataset_kwargs.use_labels = (args.G.c_dim != 0)
+    if network_pkl is not None:
+        args.dataset_kwargs.resolution = args.G.img_resolution
+        args.dataset_kwargs.use_labels = (args.G.c_dim != 0)
+    else:
+        args.dataset_kwargs.resolution = args.dataset2_kwargs.resolution = 256
+        args.dataset_kwargs.use_labels = args.dataset2_kwargs.use_labels = False
     if mirror is not None:
         args.dataset_kwargs.xflip = mirror
 
@@ -187,10 +198,12 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
 
     # Locate run dir.
     args.run_dir = None
-    if os.path.isfile(network_pkl):
-        pkl_dir = os.path.dirname(network_pkl)
-        if os.path.isfile(os.path.join(pkl_dir, 'training_options.json')):
-            args.run_dir = pkl_dir
+    if network_pkl is not None:
+        args.run_dir = None
+        if os.path.isfile(network_pkl):
+            pkl_dir = os.path.dirname(network_pkl)
+            if os.path.isfile(os.path.join(pkl_dir, 'training_options.json')):
+                args.run_dir = pkl_dir
 
     # Launch processes.
     if args.verbose:
