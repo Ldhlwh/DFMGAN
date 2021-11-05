@@ -45,6 +45,8 @@ def num_range(s: str) -> List[int]:
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
 @click.option('--output', help='Where to save the output images', type=str, required=True, metavar='FILE')
 @click.option('--cmp', help='Generate images for comparison', type=bool, metavar='BOOL', is_flag=True)
+@click.option('--gen-mask', help='Generate masks along with images', type=bool, metavar='BOOL', is_flag=True)
+
 
 def generate_images(
     ctx: click.Context,
@@ -56,6 +58,7 @@ def generate_images(
     class_idx: Optional[int],
     projected_w: Optional[str],
     cmp: bool,
+    gen_mask: bool,
 ):
     """Generate images using pretrained network pickle.
 
@@ -177,7 +180,7 @@ def generate_images(
 
             img = ((img.permute(0, 2, 3, 1) + 1.0) * 127.5).clamp(0, 255).to(torch.uint8)
             PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(os.path.join(output, '%d_img.png' % seed_idx))
-            if mask is not None:
+            if gen_mask and (mask is not None):
                 mask = ((mask.permute(0, 2, 3, 1) + 1.0) * 127.5).clamp(0, 255).to(torch.uint8)
                 PIL.Image.fromarray(mask[0].cpu().numpy(), 'RGB').save(os.path.join(output, '%d_mask.png' % seed_idx))
 

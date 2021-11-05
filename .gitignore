@@ -5,7 +5,7 @@ __pycache__/
 /data
 /docs/
 /gifs
-/runs
+/*runs
 /pkls
 /gen_img
 
