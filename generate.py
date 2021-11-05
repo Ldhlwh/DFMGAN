@@ -45,12 +45,8 @@ def num_range(s: str) -> List[int]:
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
 @click.option('--output', help='Where to save the output images', type=str, required=True, metavar='FILE')
 @click.option('--cmp', help='Generate images for comparison', type=bool, metavar='BOOL', is_flag=True)
-<<<<<<< HEAD
 @click.option('--gen-mask', help='Generate masks along with images', type=bool, metavar='BOOL', is_flag=True)
 
-=======
-@click.option('--gen-mask', help='Generate masks with images', type=bool, metavar='BOOL', is_flag=True)
->>>>>>> c18dbb51b620581f0e18190c46edb8af952c6438
 
 def generate_images(
     ctx: click.Context,
