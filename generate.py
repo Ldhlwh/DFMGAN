@@ -45,8 +45,9 @@ def num_range(s: str) -> List[int]:
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
 @click.option('--output', help='Where to save the output images', type=str, required=True, metavar='FILE')
 @click.option('--cmp', help='Generate images for comparison', type=bool, metavar='BOOL', is_flag=True)
-@click.option('--gen-mask', help='Generate masks along with images', type=bool, metavar='BOOL', is_flag=True)
 
+@click.option('--gen-good', help='Generate good images along with images', type=bool, metavar='BOOL', is_flag=True)
+@click.option('--gen-mask', help='Generate masks along with images', type=bool, metavar='BOOL', is_flag=True)
 
 def generate_images(
     ctx: click.Context,
@@ -59,6 +60,7 @@ def generate_images(
     projected_w: Optional[str],
     cmp: bool,
     gen_mask: bool,
+    gen_good: bool,
 ):
     """Generate images using pretrained network pickle.
 
@@ -90,7 +92,7 @@ def generate_images(
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
-    #os.makedirs(outdir, exist_ok=True)
+    os.makedirs(output, exist_ok=True)
 
     # Synthesize the result of a W projection.
     if projected_w is not None:
@@ -110,7 +112,7 @@ def generate_images(
         if cmp:
             seeds = [x for x in range(10)]
         else:
-            seeds = [x for x in range(100)]
+            seeds = [x for x in range(1000)]
         #ctx.fail('--seeds option is required when not using --projected-w')
 
     # Labels.
@@ -124,25 +126,34 @@ def generate_images(
             print ('warn: --class=lbl ignored when running on an unconditional network')
 
     # Generate images.
-    os.makedirs(output)
+    #os.makedirs(output)
     if cmp:
+        z0 = torch.randn(1, G.z_dim).to(device)
+        z00 = torch.randn(1, G.z_dim).to(device)
+        z1 = torch.randn(1, G.z_dim).to(device)
+        z2 = torch.randn(1, G.z_dim).to(device)
         canvas = []
-        for seed_idx, seed in tqdm(enumerate(seeds)):
-            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+        N = 5
+        for seed_idx in range(N):
+        #for seed_idx, seed in tqdm(enumerate(seeds)):
+            #z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+
+            z = z0 * seed_idx / (N - 1) + z00 * (1 - seed_idx / (N - 1))
+            defect_z = z1 * seed_idx / (N - 1) + z2 * (1 - seed_idx / (N - 1))
             if hasattr(G, 'transfer'):
                 transfer = (G.transfer != 'none')
             else: 
                 transfer = False
 
             if transfer:
-                defect_z = torch.from_numpy(np.random.RandomState(seed + len(seeds)).randn(1, G.z_dim)).to(device)
+                #defect_z = torch.from_numpy(np.random.RandomState(seed + len(seeds)).randn(1, G.z_dim)).to(device)
                 ws = G.mapping(z, None)
                 defect_ws = G.defect_mapping(defect_z, label, truncation_psi=truncation_psi)
                 if G.transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis']:
                     img, mask = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = True, fix_residual_to_zero = False)
                     good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = False, fix_residual_to_zero = True)
                     mask = torch.where(mask >= 0.0, 1.0, -1.0)
-                    img = torch.cat([good_img, img, mask.repeat((1, 3, 1, 1))], dim = 2)
+                    #img = torch.cat([good_img, img, mask.repeat((1, 3, 1, 1))], dim = 2)
                 else:
                     img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = False)
                     good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = True)
@@ -171,6 +182,8 @@ def generate_images(
                 defect_ws = G.defect_mapping(defect_z, label, truncation_psi=truncation_psi)
                 if G.transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis']:
                     img, mask = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = True, fix_residual_to_zero = False)
+                    if gen_good:
+                        good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = False, fix_residual_to_zero = True)
                     mask = torch.where(mask >= 0.0, 1.0, -1.0).repeat(1, 3, 1, 1)
                 else:
                     img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = False)
@@ -183,6 +196,9 @@ def generate_images(
             if gen_mask and (mask is not None):
                 mask = ((mask.permute(0, 2, 3, 1) + 1.0) * 127.5).clamp(0, 255).to(torch.uint8)
                 PIL.Image.fromarray(mask[0].cpu().numpy(), 'RGB').save(os.path.join(output, '%d_mask.png' % seed_idx))
+            if gen_good:
+                good = ((good_img.permute(0, 2, 3, 1) + 1.0) * 127.5).clamp(0, 255).to(torch.uint8)
+                PIL.Image.fromarray(good[0].cpu().numpy(), 'RGB').save(os.path.join(output, '%d_good.png' % seed_idx))
 
 
 #----------------------------------------------------------------------------
