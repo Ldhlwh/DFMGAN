@@ -622,7 +622,7 @@ class Generator(torch.nn.Module):
         else:
             self.synthesis = SynthesisNetwork(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels, **synthesis_kwargs)
         self.num_ws = self.synthesis.num_ws
-        self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
+        self.mapping = MappingNetwork(z_dim=z_dim, c_dim=0 if self.transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis'] else c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
         if self.transfer in ['dual_mod', 'res_block', 'res_block_match_dis', 'res_block_uni_dis']:
             self.num_defect_ws = self.synthesis.num_defect_ws

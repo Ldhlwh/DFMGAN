@@ -494,7 +494,7 @@ class CommaSeparatedList(click.ParamType):
 
 # Dataset.
 @click.option('--data', help='Training data (directory or zip)', metavar='PATH', required=True)
-@click.option('--cond', help='Train conditional model based on dataset labels [default: false]', type=bool, metavar='BOOL')
+@click.option('--cond', help='Train conditional model based on dataset labels [default: false]', type=bool, metavar='BOOL', is_flag = True)
 @click.option('--subset', help='Train with only N images [default: all]', type=int, metavar='INT')
 @click.option('--mirror', help='Enable dataset x-flips [default: false]', type=bool, metavar='BOOL')
 
@@ -535,7 +535,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--tanh-k', help='mask = tanh(k * raw_mask) [default: 10.0]', default=10.0, type=float)
 @click.option('--tanh-mask', help='Add tanh() to mask [default: late]', default='late', type=click.Choice(['none', 'late']))
 @click.option('--dmatch-scale', help='D_match channel base / channel max [default: 4096/128]', default='4096/128', type=click.Choice(['16384/512', '8192/256', '4096/128']))
-
+#@click.option('--transfer-cond', help='Enable multi-class defects [default: False]', type = bool, metavar = 'BOOL', is_flag = True)
 
 
 def main(ctx, outdir, dry_run, **config_kwargs):

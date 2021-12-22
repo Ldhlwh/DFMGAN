@@ -48,6 +48,7 @@ def num_range(s: str) -> List[int]:
 
 @click.option('--gen-good', help='Generate good images along with images', type=bool, metavar='BOOL', is_flag=True)
 @click.option('--gen-mask', help='Generate masks along with images', type=bool, metavar='BOOL', is_flag=True)
+@click.option('--num', help='Total number of generated images. Only when --seeds is unspecified', type=int)
 
 def generate_images(
     ctx: click.Context,
@@ -61,6 +62,7 @@ def generate_images(
     cmp: bool,
     gen_mask: bool,
     gen_good: bool,
+    num: int,
 ):
     """Generate images using pretrained network pickle.
 
@@ -109,10 +111,13 @@ def generate_images(
         return
 
     if seeds is None:
-        if cmp:
-            seeds = [x for x in range(10)]
+        if num is None:
+            if cmp:
+                seeds = [x for x in range(10)]
+            else:
+                seeds = [x for x in range(5000)]
         else:
-            seeds = [x for x in range(1000)]
+            seeds = [x for x in range(num)]
         #ctx.fail('--seeds option is required when not using --projected-w')
 
     # Labels.
@@ -126,27 +131,27 @@ def generate_images(
             print ('warn: --class=lbl ignored when running on an unconditional network')
 
     # Generate images.
-    #os.makedirs(output)
+    os.makedirs(output, exist_ok = True)
     if cmp:
-        z0 = torch.randn(1, G.z_dim).to(device)
-        z00 = torch.randn(1, G.z_dim).to(device)
-        z1 = torch.randn(1, G.z_dim).to(device)
-        z2 = torch.randn(1, G.z_dim).to(device)
+        # z0 = torch.randn(1, G.z_dim).to(device)
+        # z00 = torch.randn(1, G.z_dim).to(device)
+        # z1 = torch.randn(1, G.z_dim).to(device)
+        # z2 = torch.randn(1, G.z_dim).to(device)
         canvas = []
-        N = 5
-        for seed_idx in range(N):
-        #for seed_idx, seed in tqdm(enumerate(seeds)):
-            #z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+        #N = 5
+        #for seed_idx in range(N):
+        for seed_idx, seed in tqdm(enumerate(seeds)):
+            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
 
-            z = z0 * seed_idx / (N - 1) + z00 * (1 - seed_idx / (N - 1))
-            defect_z = z1 * seed_idx / (N - 1) + z2 * (1 - seed_idx / (N - 1))
+            #z = z0 * seed_idx / (N - 1) + z00 * (1 - seed_idx / (N - 1))
+            #defect_z = z1 * seed_idx / (N - 1) + z2 * (1 - seed_idx / (N - 1))
             if hasattr(G, 'transfer'):
                 transfer = (G.transfer != 'none')
             else: 
                 transfer = False
 
             if transfer:
-                #defect_z = torch.from_numpy(np.random.RandomState(seed + len(seeds)).randn(1, G.z_dim)).to(device)
+                defect_z = torch.from_numpy(np.random.RandomState(seed + len(seeds)).randn(1, G.z_dim)).to(device)
                 ws = G.mapping(z, None)
                 defect_ws = G.defect_mapping(defect_z, label, truncation_psi=truncation_psi)
                 if G.transfer in ['res_block', 'res_block_match_dis', 'res_block_uni_dis']:

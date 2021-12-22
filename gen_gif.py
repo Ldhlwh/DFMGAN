@@ -25,6 +25,7 @@ import legacy
 @click.option('--output', type=str)
 
 @click.option('--fix-content', '--fc', type=click.BOOL, default=False, is_flag = True)
+@click.option('--cond', help = 'conditional, set a label or "all"', type=str, default = 'none')
 
 
 def generate_gif(
@@ -39,6 +40,7 @@ def generate_gif(
     noise_mode: str,
     output: str,
     fix_content: bool,
+    cond: str,
 ):
     """Generate gif using pretrained network pickle.
 
@@ -58,13 +60,14 @@ def generate_gif(
         print('Must be a transfer model.')
         exit(1)
 
-    assert network_pkl.split('/')[0] == 'runs'
-    assert network_pkl.split('/')[1].endswith('runs')
-    assert network_pkl.split('/')[3].startswith('000')
-    assert network_pkl.endswith('pkl')
+    if output is None:
+        assert network_pkl.split('/')[0] == 'runs'
+        assert network_pkl.split('/')[1].endswith('runs')
+        assert network_pkl.split('/')[3].startswith('000')
+        assert network_pkl.endswith('pkl')
 
-    run_type = network_pkl.split('/')[1].split('_runs')[0]
-    save_type = 'gifs/gifs_' + run_type
+        run_type = network_pkl.split('/')[1].split('_runs')[0]
+        save_type = 'gifs/gifs_' + run_type
 
     if output is None:
         kimg = network_pkl.split('/')[-1].split('.')[0].split('-')[-1]
@@ -83,11 +86,25 @@ def generate_gif(
     np.random.seed(seed)
 
     output_seq = []
+    if cond == 'all':
+        num = G.c_dim
+        
     batch_size = num
     latent_size = G.z_dim
-    latents = [np.random.randn(batch_size, latent_size) for _ in range(num_phases)]
+    latents = [np.random.randn(batch_size, latent_size) if cond != 'all' else np.random.randn(1, latent_size).repeat(batch_size, 0) for _ in range(num_phases)]
     if transfer: 
-        latents_defect = [np.random.randn(batch_size, latent_size) for _ in range(num_phases)]
+        latents_defect = [np.random.randn(batch_size, latent_size) if cond != 'all' else np.random.randn(1, latent_size).repeat(batch_size, 0) for _ in range(num_phases)]
+
+    if cond == 'all':
+        num_c = G.c_dim
+        cond_list = [np.diag([1 for _ in range(num_c)]) for _ in range(num_phases)]
+    elif cond != 'none':
+        num_c = G.c_dim
+        c_label = int(cond)
+        c_npy = np.zeros(num_c)
+        c_npy[c_label] = 1
+        cond_list = [c_npy.reshape(1, -1).repeat(batch_size, 0) for _ in range(num_phases)]
+
 
     def to_image_grid(outputs):
         canvas = []
@@ -116,8 +133,8 @@ def generate_gif(
     for i in range(num_phases):
         dlatents0 = G.mapping(torch.from_numpy(latents[i - 1] if not fix_content else latents[0]).to(device), None)
         dlatents1 = G.mapping(torch.from_numpy(latents[i] if not fix_content else latents[0]).to(device), None)
-        defectlatents0 = G.defect_mapping(torch.from_numpy(latents_defect[i - 1]).to(device), None)
-        defectlatents1 = G.defect_mapping(torch.from_numpy(latents_defect[i]).to(device), None)
+        defectlatents0 = G.defect_mapping(torch.from_numpy(latents_defect[i - 1]).to(device), None if cond == 'none' else torch.from_numpy(cond_list[i - 1]).to(device))
+        defectlatents1 = G.defect_mapping(torch.from_numpy(latents_defect[i]).to(device), None if cond == 'none' else torch.from_numpy(cond_list[i]).to(device))
         for j in range(transition_frames):
             dlatents = (dlatents0 * (transition_frames - j) + dlatents1 * j) / transition_frames
             defectlatents = (defectlatents0 * (transition_frames - j) + defectlatents1 * j) / transition_frames
