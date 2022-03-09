@@ -81,7 +81,7 @@ def subprocess_fn(rank, args, temp_dir):
             print(f'Calculating {metric}...')
         progress = metric_utils.ProgressMonitor(verbose=args.verbose)
         result_dict = metric_main.calc_metric(metric=metric, G=G, dataset_kwargs=args.dataset_kwargs,
-            num_gpus=args.num_gpus, rank=rank, device=device, progress=progress, dataset2_kwargs=args.dataset2_kwargs if hasattr(args, 'dataset2_kwargs') else {})
+            num_gpus=args.num_gpus, rank=rank, device=device, progress=progress, dataset2_kwargs=args.dataset2_kwargs if hasattr(args, 'dataset2_kwargs') else {}, cache = args.cache)
         if rank == 0:
             metric_main.report_metric(result_dict, run_dir=args.run_dir, snapshot_pkl=args.network_pkl)
         if rank == 0 and args.verbose:
@@ -115,8 +115,9 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mirror', help='Whether the dataset was augmented with x-flips during training [default: look up]', type=bool, metavar='BOOL')
 @click.option('--gpus', help='Number of GPUs to use', type=int, default=1, metavar='INT', show_default=True)
 @click.option('--verbose', help='Print optional information', type=bool, default=True, metavar='BOOL', show_default=True)
+@click.option('--cache', help='Use computed cache', type=bool, default=False, metavar='BOOL', show_default=True)
 
-def calc_metrics(ctx, network_pkl, metrics, data, data2, mirror, gpus, verbose):
+def calc_metrics(ctx, network_pkl, metrics, data, data2, mirror, gpus, verbose, cache):
     """Calculate quality metrics for previous training run or pretrained network pickle.
 
     Examples:
@@ -154,7 +155,7 @@ def calc_metrics(ctx, network_pkl, metrics, data, data2, mirror, gpus, verbose):
     dnnlib.util.Logger(should_flush=True)
 
     # Validate arguments.
-    args = dnnlib.EasyDict(metrics=metrics, num_gpus=gpus, network_pkl=network_pkl, verbose=verbose)
+    args = dnnlib.EasyDict(metrics=metrics, num_gpus=gpus, network_pkl=network_pkl, verbose=verbose, cache=cache)
     if not all(metric_main.is_valid_metric(metric) for metric in args.metrics):
         ctx.fail('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
     if not args.num_gpus >= 1:
