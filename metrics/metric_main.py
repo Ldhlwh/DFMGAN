@@ -18,6 +18,7 @@ from . import kernel_inception_distance
 from . import precision_recall
 from . import perceptual_path_length
 from . import inception_score
+from . import lpips
 
 #----------------------------------------------------------------------------
 
@@ -104,10 +105,22 @@ def kid5k_full(opts):
     return dict(kid5k_full=kid)
 
 @register_metric
+def fid_between_dir(opts):
+    opts.dataset_kwargs.update(max_size=None, xflip=False)
+    fid = frechet_inception_distance.compute_fid_between_dir(opts, max_real=1000000, num_gen=5000, num_subsets=100, max_subset_size=1000)
+    return dict(fid_between_dir=fid)
+
+@register_metric
 def kid_between_dir(opts):
     opts.dataset_kwargs.update(max_size=None, xflip=False)
     kid = kernel_inception_distance.compute_kid_between_dir(opts, max_real=1000000, num_gen=5000, num_subsets=100, max_subset_size=1000)
     return dict(kid_between_dir=kid)
+
+@register_metric
+def clpips1k(opts):
+    opts.dataset_kwargs.update(max_size=None, xflip=False)
+    clpips1k, clpips1k_rz = lpips.compute_clpips(opts, num_gen = 1000)
+    return dict(clpips1k = clpips1k, clpips1k_rz = clpips1k_rz)
 
 @register_metric
 def pr50k3_full(opts):

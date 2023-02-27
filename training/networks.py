@@ -879,9 +879,6 @@ class Discriminator(torch.nn.Module):
 
 #----------------------------------------------------------------------------
 
-#----------------------------------------------------------------------------
-# Added by Duan
-
 @persistence.persistent_class
 class DiscriminatorUnified(torch.nn.Module):
     def __init__(self,

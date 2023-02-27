@@ -70,7 +70,7 @@ def open_image_folder(source_dir, *, max_images: Optional[int]):
             arch_fname = os.path.relpath(fname, source_dir)
             arch_fname = arch_fname.replace('\\', '/')
             img = np.array(PIL.Image.open(fname))
-            yield dict(img=img, label=labels.get(arch_fname))
+            yield dict(img=img, label=labels.get(arch_fname), img_name = os.path.basename(fname))
             if idx >= max_idx-1:
                 break
     return max_idx, iterate_images()
@@ -310,6 +310,9 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 @click.option('--transform', help='Input crop/resize mode', type=click.Choice(['center-crop', 'center-crop-wide']))
 @click.option('--width', help='Output width', type=int)
 @click.option('--height', help='Output height', type=int)
+
+@click.option('--source-mask', help = 'Directory for masks', metavar = 'PATH', default = None)
+
 def convert_dataset(
     ctx: click.Context,
     source: str,
@@ -318,7 +321,9 @@ def convert_dataset(
     transform: Optional[str],
     resize_filter: str,
     width: Optional[int],
-    height: Optional[int]
+    height: Optional[int],
+
+    source_mask: str,
 ):
     """Convert an image dataset into a dataset archive usable with StyleGAN2 ADA PyTorch.
 
@@ -394,7 +399,7 @@ def convert_dataset(
     labels = []
     for idx, image in tqdm(enumerate(input_iter), total=num_files):
         idx_str = f'{idx:08d}'
-        archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
+        archive_fname = f'{idx_str[:5]}/img{idx_str}' + ('.npy' if source_mask is not None else '.png')
 
         # Apply crop and resize.
         img = transform_image(image['img'])
@@ -425,10 +430,23 @@ def convert_dataset(
             err = [f'  dataset {k}/cur image {k}: {dataset_attrs[k]}/{cur_image_attrs[k]}' for k in dataset_attrs.keys()]
             error(f'Image {archive_fname} attributes must be equal across all images of the dataset.  Got:\n' + '\n'.join(err))
 
-        # Save the image as an uncompressed PNG.
-        img = PIL.Image.fromarray(img, { 1: 'L', 3: 'RGB' }[channels])
         image_bits = io.BytesIO()
-        img.save(image_bits, format='png', compress_level=0, optimize=False)
+        # Load the corresponding mask
+        if source_mask is not None:
+            img_idx, img_ext = os.path.splitext(image['img_name'])
+            mask = np.array(PIL.Image.open(os.path.join(source_mask, f'{img_idx}_mask{img_ext}')))
+            mask = transform_image(mask)
+            mask[mask >= 127.5] = 255
+            mask[mask < 127.5] = 0
+
+            img = np.concatenate((img, np.expand_dims(mask, axis = -1)), axis = 2)
+            assert img.shape == (height, width, 4)
+            np.save(image_bits, img)
+        else:
+            # Save the image as an uncompressed PNG.
+            img = PIL.Image.fromarray(img, { 1: 'L', 3: 'RGB' }[channels])
+            img.save(image_bits, format='png', compress_level=0, optimize=False)
+
         save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
         labels.append([archive_fname, image['label']] if image['label'] is not None else None)
 

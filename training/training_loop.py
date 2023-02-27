@@ -292,7 +292,7 @@ def training_loop(
                     target_param = itertools.chain(*target_param)
 
         if rank == 0:
-            print('[Duan] Training %d params of %s' % (num_param, name))
+            print('Training %d params of %s' % (num_param, name))
 
         if reg_interval is None:
             opt = dnnlib.util.construct_class_by_name(params=target_param, **opt_kwargs) # subclass of torch.optim.Optimizer
