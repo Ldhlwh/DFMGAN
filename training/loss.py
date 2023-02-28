@@ -84,7 +84,7 @@ class StyleGAN2Loss(Loss):
                     img = self.G_synthesis(ws, defect_ws, output_mask = output_mask)
                 input_list.append(defect_ws)
 
-                if mode_seek in ['w/mask', 'w/img', 'z/mask']:
+                if mode_seek in ['w/mask', 'w/img', 'z/mask'] and output_mask:
                     half_batch = ws.shape[0] // 2
                     half_img, half_mask = self.G_synthesis(ws[:half_batch], defect_ws[half_batch:], output_mask = True)
         
@@ -219,10 +219,10 @@ class StyleGAN2Loss(Loss):
         if do_Dmain:
             with torch.autograd.profiler.record_function('Dgen_forward'):
                 if self.transfer == 'res_block_uni_dis':
-                    gen_img, gen_mask, _gen_ws = self.run_G(gen_z, gen_c, sync=False, defect_z = gen_defect_z, transfer = self.transfer, output_mask = True)
+                    gen_img, gen_mask, _ = self.run_G(gen_z, gen_c, sync=False, defect_z = gen_defect_z, transfer = self.transfer, output_mask = True)
                     gen_logits = self.run_D_uni(gen_img, gen_mask, gen_c, sync=False)
                 else:
-                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, sync=False, defect_z = gen_defect_z, transfer = self.transfer)
+                    gen_img, _ = self.run_G(gen_z, gen_c, sync=False, defect_z = gen_defect_z, transfer = self.transfer)
                     gen_logits = self.run_D(gen_img, gen_c, sync=False) # Gets synced by loss_Dreal.
 
                 training_stats.report('Loss/scores/fake', gen_logits)
@@ -266,7 +266,7 @@ class StyleGAN2Loss(Loss):
         loss_D_matchgen = 0
         if do_D_matchmain:
             with torch.autograd.profiler.record_function('D_matchgen_forward'):
-                gen_img, gen_mask, _gen_ws = self.run_G(gen_z, gen_c, sync=False, defect_z = gen_defect_z, transfer = self.transfer, output_mask = True)
+                gen_img, gen_mask, _ = self.run_G(gen_z, gen_c, sync=False, defect_z = gen_defect_z, transfer = self.transfer, output_mask = True)
 
                 if self.tanh_mask == 'late':
                     gen_mask = torch.tanh(self.tanh_k * gen_mask)
