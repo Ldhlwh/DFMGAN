@@ -109,7 +109,7 @@ class CommaSeparatedList(click.ParamType):
 @click.command()
 @click.pass_context
 @click.option('network_pkl', '--network', help='Network pickle filename or URL', metavar='PATH')
-@click.option('--metrics', help='Comma-separated list or "none"', type=CommaSeparatedList(), default='fid5k_full,kid5k_full,is5k', show_default=True)
+@click.option('--metrics', help='Comma-separated list or "none"', type=CommaSeparatedList(), default='fid5k_full,kid5k_full,clpips1k', show_default=True)
 @click.option('--data', help='Dataset to evaluate metrics against (directory or zip) [default: same as training data]', metavar='PATH')
 @click.option('--data2', help='Dataset2 to evaluate metrics against (directory or zip)', metavar='PATH')
 @click.option('--mirror', help='Whether the dataset was augmented with x-flips during training [default: look up]', type=bool, metavar='BOOL')
