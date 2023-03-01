@@ -8,7 +8,7 @@ This repository is the official implementation of the following paper:
 > [Yuxuan Duan](https://github.com/Ldhlwh), [Yan Hong](https://github.com/hy-zpg), [Li Niu](http://www.ustcnewly.com/), [Liqing Zhang](https://bcmi.sjtu.edu.cn/~zhangliqing/)<br>
 > The 37th AAAI Conference on Artificial Intelligence (AAAI 23)
 > 
-> > **Abstract**
+> > **Abstract**<br>
 > > <font size=3> *The performances of defect inspection have been severely hindered by insufficient defect images in industries, which can be alleviated by generating more samples as data augmentation. We propose the first defect image generation method in the challenging few-shot cases. Given just a handful of defect images and relatively more defect-free ones, our goal is to augment the dataset with new defect images. Our method consists of two training stages. First, we train a data-efficient StyleGAN2 on defect-free images as the backbone. Second, we attach defect-aware residual blocks to the backbone, which learn to produce reasonable defect masks and accordingly manipulate the features within the masked regions by training the added modules on limited defect images. Extensive experiments on MVTec AD dataset not only validate the effectiveness of our method in generating realistic and diverse defect images, but also manifest the benefits it brings to downstream defect inspection tasks.*</font>
 
 ![](./docs/dfmgan.jpg)
@@ -35,7 +35,7 @@ This repository is the official implementation of the following paper:
     
     # Defect image & mask dataset for Stage 2
     python dataset_tool.py --source ./data/hazelnut/test/hole \
-        --source-mask /path/to/hazelnut/ground_truth/hole \
+        --source-mask ./data/hazelnut/ground_truth/hole \
         --dest ./data/hazelnut_hole_mask.zip --width 256 --height 256
     ```
     
@@ -45,12 +45,15 @@ This repository is the official implementation of the following paper:
     ```shell
     python train.py --data ./data/hazelnut_good.zip \
         --outdir runs/hazelnut_good \
-        --gpus 2 --kimg 3000    # You may try using 1, 2, 4 or 8 GPUs
+        --gpus 2 --kimg 3000
     
     # If training for 3000 kimgs are not enough, you may resume the pretraining by
     python train.py --data ./data/hazelnut_good.zip \
         --outdir runs/hazelnut_good \
         --gpus 2 --kimg 3000 --resume runs/hazelnut_good/path/to/the/latest/model.pkl
+        
+    # You may also try different values for the following settings
+    # --gpus: number of GPUs to be used
     ```
 - Check the qualitative & quantitative results under ```./runs/hazelnut_good/*```. Chose a good model for the transfer in Stage 2. You may optionally make a copy as ```./pkls/hazelnut_good.pkl``` for easy loading.
 
@@ -72,7 +75,7 @@ This repository is the official implementation of the following paper:
 
 ## Inference: Defect Image Generation
 
-- Generate 10 random defect images: (*e.g.* object category *hazelnut*, defect category *hole*)
+- Generate 100 random defect images: (*e.g.* object category *hazelnut*, defect category *hole*)
     ```shell
     python generate.py --network pkls/hazelnut_hole.pkl \
         --output gen_img/hazelnut_hole
