@@ -99,7 +99,7 @@ If DFMGAN is helpful to your research, please cite our paper:
 
 ```
 
-### Acknowledgements
+## Acknowledgements
 
 - The work was supported by the National Science Foundation of China (62076162), and the Shanghai Municipal Science and Technology Major/Key Project, China (2021SHZDZX0102, 20511100300).
 - This repository have used codes from [StyleGAN-ADA](https://github.com/NVlabs/stylegan2-ada-pytorch) and [LPIPS](https://github.com/richzhang/PerceptualSimilarity).
