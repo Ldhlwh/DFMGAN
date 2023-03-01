@@ -43,12 +43,12 @@ def num_range(s: str) -> List[int]:
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
-@click.option('--output', help='Where to save the output images', type=str, required=True, metavar='FILE')
+@click.option('--output', help='Where to save the output images', type=str, metavar='FILE', default = None)
 @click.option('--cmp', help='Generate images for comparison', type=bool, metavar='BOOL', is_flag=True)
 
 @click.option('--gen-good', help='Generate good images along with images', type=bool, metavar='BOOL', is_flag=True)
 @click.option('--gen-mask', help='Generate masks along with images', type=bool, metavar='BOOL', is_flag=True)
-@click.option('--num', help='Total number of generated images. Only when --seeds is unspecified', type=int)
+@click.option('--num', help='Total number of generated images. Only when --seeds is unspecified. [default: 10 for cmp mode, 500 otherwise]', type=int)
 
 def generate_images(
     ctx: click.Context,
@@ -94,8 +94,6 @@ def generate_images(
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
-    os.makedirs(output, exist_ok=True)
-
     # Synthesize the result of a W projection.
     if projected_w is not None:
         if seeds is not None:
@@ -115,7 +113,7 @@ def generate_images(
             if cmp:
                 seeds = [x for x in range(10)]
             else:
-                seeds = [x for x in range(5000)]
+                seeds = [x for x in range(100)]
         else:
             seeds = [x for x in range(num)]
         #ctx.fail('--seeds option is required when not using --projected-w')
@@ -131,20 +129,23 @@ def generate_images(
             print ('warn: --class=lbl ignored when running on an unconditional network')
 
     # Generate images.
-    os.makedirs(output, exist_ok = True)
+    if output is not None and (not output.endswith('.png')):
+        os.makedirs(output, exist_ok=True)
+
+    if cmp and output is None:
+        assert network_pkl[-4:] == '.pkl'
+        kimg = network_pkl[-10:-4]
+        output = os.path.join(os.path.dirname(network_pkl), f'cmp{kimg}.png')
+
+    if not cmp and output is None:
+        print('--output must be specified when not using cmp mode')
+        exit(1)
+
     if cmp:
-        # z0 = torch.randn(1, G.z_dim).to(device)
-        # z00 = torch.randn(1, G.z_dim).to(device)
-        # z1 = torch.randn(1, G.z_dim).to(device)
-        # z2 = torch.randn(1, G.z_dim).to(device)
         canvas = []
-        #N = 5
-        #for seed_idx in range(N):
         for seed_idx, seed in tqdm(enumerate(seeds)):
             z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-
-            #z = z0 * seed_idx / (N - 1) + z00 * (1 - seed_idx / (N - 1))
-            #defect_z = z1 * seed_idx / (N - 1) + z2 * (1 - seed_idx / (N - 1))
+            
             if hasattr(G, 'transfer'):
                 transfer = (G.transfer != 'none')
             else: 
@@ -158,7 +159,7 @@ def generate_images(
                     img, mask = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = True, fix_residual_to_zero = False)
                     good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, output_mask = False, fix_residual_to_zero = True)
                     mask = torch.where(mask >= 0.0, 1.0, -1.0)
-                    #img = torch.cat([good_img, img, mask.repeat((1, 3, 1, 1))], dim = 2)
+                    img = torch.cat([good_img, mask.repeat((1, 3, 1, 1)), img], dim = 2)
                 else:
                     img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = False)
                     good_img = G.synthesis(ws, defect_ws, noise_mode=noise_mode, fix_residual_to_zero = True)

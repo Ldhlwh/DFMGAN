@@ -24,8 +24,6 @@ from torch_utils.ops import grid_sample_gradfix
 
 import legacy
 from metrics import metric_main
-
-# Added by DYX
 import itertools
 
 #----------------------------------------------------------------------------
@@ -123,7 +121,7 @@ def training_loop(
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
 
-    # added by DYX
+    # DFMGAN args
     ft = None,
     D_match_kwargs = {},
     D_match_opt_kwargs = {},

@@ -25,7 +25,7 @@ import legacy
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--output', type=str, required=True)
 
-#added by DYX
+# DFMGAN args
 @click.option('--latent-mode', help='randomly sampled latent codes', type=click.Choice(['both', 'content', 'defect', 'nores', 'none']), default='both', show_default=True)
 
 def generate_gif(

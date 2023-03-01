@@ -65,7 +65,7 @@ def setup_training_loop_kwargs(
     nobench    = None, # Disable cuDNN benchmarking: <bool>, default = False
     workers    = None, # Override number of DataLoader workers: <int>, default = 3
 
-    # Added by DYX
+    # DFMGAN args
     ft = None,
     transfer = None,
     res_st = None,
@@ -394,7 +394,7 @@ def setup_training_loop_kwargs(
             raise UserError('--workers must be at least 1')
         args.data_loader_kwargs.num_workers = workers
 
-    # Added by DYX
+    # DFMGAN args
     if ft is None or resume == 'noresume':
         args.ft = 'default'
     else:
@@ -524,7 +524,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--allow-tf32', help='Allow PyTorch to use TF32 internally', type=bool, metavar='BOOL')
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
 
-# Added by DYX
+# DFMGAN args
 @click.option('--ft', help='Finetune mode [default: default]', 
     type=click.Choice(['default', 'ft_map', 'ft_syn', 'ft_syn_2', 'ft_map_syn_2']))
 @click.option('--transfer', help='Extra network for transfer learning [default: none]', type=click.Choice(['none', 'dual_mod', 'res_block', 'res_block_match_dis', 'res_block_uni_dis']))
