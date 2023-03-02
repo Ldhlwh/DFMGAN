@@ -64,7 +64,7 @@ This repository is the official implementation of the following paper:
     python train.py --data ./data/hazelnut_hole_mask.zip \
         --outdir runs/hazelnut_hole --resume pkls/hazelnut_good.pkl \
         --gpus 2 --kimg 400 --snap 10 --transfer res_block_match_dis
-        
+    
     # You may also try different values for the following settings
     # --gpus: number of GPUs to be used
     # --lambda-ms: weight for the mode seeking loss
@@ -94,9 +94,14 @@ This repository is the official implementation of the following paper:
      
 
 ## Citation
-If DFMGAN is helpful to your research, please cite our paper:
+If you find DFMGAN helpful to your research, please cite our paper:
 ```
-
+@inproceedings{Duan2023DFMGAN,
+  title     = {Few-Shot Defect Image Generation via Defect-Aware Feature Manipulation},
+  author    = {Yuxuan Duan and Yan Hong and Li Niu and Liqing Zhang},
+  booktitle = {AAAI},
+  year      = {2023}
+}
 ```
 
 ## Acknowledgements
