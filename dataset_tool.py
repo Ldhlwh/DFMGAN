@@ -20,7 +20,7 @@ from typing import Callable, Optional, Tuple, Union
 
 import click
 import numpy as np
-import PIL.Image
+import PIL.Image, cv2
 from tqdm import tqdm
 
 #----------------------------------------------------------------------------
@@ -202,24 +202,32 @@ def make_transform(
     output_height: Optional[int],
     resize_filter: str
 ) -> Callable[[np.ndarray], Optional[np.ndarray]]:
-    resample = { 'box': PIL.Image.BOX, 'lanczos': PIL.Image.LANCZOS }[resize_filter]
+    resample = { 'box': PIL.Image.BOX, 'lanczos': PIL.Image.LANCZOS, 'cv2_inter_cubic': cv2.INTER_CUBIC }[resize_filter]
+    def resize(width, height, img):
+        if resize_filter == 'cv2_inter_cubic':
+            img = cv2.resize(img, (width, height), interpolation = resample)
+            return img
+        else:
+            img = PIL.Image.fromarray(img)
+            img = img.resize((width, height), resample)
+            return np.array(img)
+        
     def scale(width, height, img):
         w = img.shape[1]
         h = img.shape[0]
         if width == w and height == h:
             return img
-        img = PIL.Image.fromarray(img)
         ww = width if width is not None else w
         hh = height if height is not None else h
-        img = img.resize((ww, hh), resample)
-        return np.array(img)
+        return resize(ww, hh, img)
 
     def center_crop(width, height, img):
         crop = np.min(img.shape[:2])
         img = img[(img.shape[0] - crop) // 2 : (img.shape[0] + crop) // 2, (img.shape[1] - crop) // 2 : (img.shape[1] + crop) // 2]
-        img = PIL.Image.fromarray(img, 'RGB')
-        img = img.resize((width, height), resample)
-        return np.array(img)
+        # img = PIL.Image.fromarray(img, 'RGB')
+        # img = img.resize((width, height), resample)
+        # return np.array(img)
+        return resize(width, height, img)
 
     def center_crop_wide(width, height, img):
         ch = int(np.round(width * img.shape[0] / img.shape[1]))
@@ -227,9 +235,10 @@ def make_transform(
             return None
 
         img = img[(img.shape[0] - ch) // 2 : (img.shape[0] + ch) // 2]
-        img = PIL.Image.fromarray(img, 'RGB')
-        img = img.resize((width, height), resample)
-        img = np.array(img)
+        # img = PIL.Image.fromarray(img, 'RGB')
+        # img = img.resize((width, height), resample)
+        # img = np.array(img)
+        img = resize(width, height, img)
 
         canvas = np.zeros([width, width, 3], dtype=np.uint8)
         canvas[(width - height) // 2 : (width + height) // 2, :] = img
@@ -306,7 +315,7 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 @click.option('--source', help='Directory or archive name for input dataset', required=True, metavar='PATH')
 @click.option('--dest', help='Output directory or archive name for output dataset', required=True, metavar='PATH')
 @click.option('--max-images', help='Output only up to `max-images` images', type=int, default=None)
-@click.option('--resize-filter', help='Filter to use when resizing images for output resolution', type=click.Choice(['box', 'lanczos']), default='lanczos', show_default=True)
+@click.option('--resize-filter', help='Filter to use when resizing images for output resolution', type=click.Choice(['box', 'lanczos', 'cv2_inter_cubic']), default='cv2_inter_cubic', show_default=True)
 @click.option('--transform', help='Input crop/resize mode', type=click.Choice(['center-crop', 'center-crop-wide']))
 @click.option('--width', help='Output width', type=int)
 @click.option('--height', help='Output height', type=int)
