@@ -1,6 +1,6 @@
 # Defect-aware Feature Manipulation GAN
 
-![](./docs/fsdig.jpg)
+<img src="./docs/fsdig.jpg" width="600">
 
 This repository is the official implementation of the following paper:
 
