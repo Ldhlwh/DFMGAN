@@ -16,7 +16,7 @@ This repository is the official implementation of the following paper:
 
 ## Update Notes
 
-- **12/21/2023** Pretrained ```hazelnut_good.pkl``` and ```hazelnut_hole.pkl``` are now available for a quick trial.
+- **12/21/2023** Pretrained ```hazelnut_good.pkl``` and ```hazelnut_hole.pkl``` are now available [here](https://drive.google.com/drive/folders/17LQeN3uFalD_wWqcObNLbbH3nsssmCfh?usp=sharing) for a quick trial.
 
 ## Getting Started
 
