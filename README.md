@@ -14,6 +14,10 @@ This repository is the official implementation of the following paper:
 
 ![](./docs/dfmgan.jpg)
 
+## Update Notes
+
+- **12/21/2023** Pretrained ```hazelnut_good.pkl``` and ```hazelnut_hole.pkl``` are now available for a quick trial.
+
 ## Getting Started
 
 - This repository is based on the official NVIDIA implementaion of [StyleGAN2-ADA](https://github.com/NVlabs/stylegan2-ada-pytorch). Follow the [requirements](https://github.com/NVlabs/stylegan2-ada-pytorch#requirements) of it before the steps below. (Windows and Docker are not supported.)
@@ -42,6 +46,7 @@ This repository is the official implementation of the following paper:
     
 ## Stage 1: Pretrain
 
+- **Update on 12/21/2023** You may skip this stage by downloading the pretrained ```hazelnut_good.pkl``` provided [here](https://drive.google.com/drive/folders/17LQeN3uFalD_wWqcObNLbbH3nsssmCfh?usp=sharing).
 - Pretrain a StyleGAN2 model on defect-free images, using the default configuration ```auto```: (*e.g.* object category *hazelnut*)
     ```shell
     python train.py --data ./data/hazelnut_good.zip \
@@ -60,6 +65,7 @@ This repository is the official implementation of the following paper:
 
 ## Stage 2: Transfer
 
+- **Update on 12/21/2023** You may skip this stage by downloading the pretrained ```hazelnut_hole.pkl``` provided [here](https://drive.google.com/drive/folders/17LQeN3uFalD_wWqcObNLbbH3nsssmCfh?usp=sharing).
 - Transfer the pretrained model to defect images with the defect-aware feature manipulation process: (*e.g.* object category *hazelnut*, defect category *hole*)
     ```shell
     python train.py --data ./data/hazelnut_hole_mask.zip \
