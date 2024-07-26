@@ -13,7 +13,7 @@ This repository is the official implementation of the following paper, which foc
 
 ## Update Notes
 
-- **Jul. 26, 2024** :warning: I have marked some issues as [*good first issue*](https://github.com/Ldhlwh/DFMGAN/issues?q=is%3Aissue+label%3A%22good+first+issue%22+is%3Aclosed). You are welcome to check on them if you
+- **Jul. 26, 2024** :warning: Some issues have been marked as [*good first issue*](https://github.com/Ldhlwh/DFMGAN/issues?q=is%3Aissue+label%3A%22good+first+issue%22+is%3Aclosed). You are welcome to check on them if you
     - encounter errors w.r.t. plugins, especially bias_act and upfirdn2d;
     - have insufficient VRAM;
     - fail to render good defect-free images in the first stage (e.g. completely wrong color or orientation).
