@@ -2,25 +2,26 @@
 
 <img src="./docs/fsdig.jpg" width="600">
 
-This repository is the official implementation of the following paper:
+This repository is the official implementation of the following paper, which focuses on defect/anomaly generation for downstream tasks in industries:
 
 > **Few-Shot Defect Image Generation via Defect-Aware Feature Manipulation**<br>
 > [Yuxuan Duan](https://github.com/Ldhlwh), [Yan Hong](https://github.com/hy-zpg), [Li Niu](http://www.ustcnewly.com/), [Liqing Zhang](https://bcmi.sjtu.edu.cn/~zhangliqing/)<br>
 > The 37th AAAI Conference on Artificial Intelligence (AAAI 2023)<br>
 > https://arxiv.org/abs/2303.02389<br>
-> 
-> > **Abstract**<br>
-> > <font size=3> *The performances of defect inspection have been severely hindered by insufficient defect images in industries, which can be alleviated by generating more samples as data augmentation. We propose the first defect image generation method in the challenging few-shot cases. Given just a handful of defect images and relatively more defect-free ones, our goal is to augment the dataset with new defect images. Our method consists of two training stages. First, we train a data-efficient StyleGAN2 on defect-free images as the backbone. Second, we attach defect-aware residual blocks to the backbone, which learn to produce reasonable defect masks and accordingly manipulate the features within the masked regions by training the added modules on limited defect images. Extensive experiments on MVTec AD dataset not only validate the effectiveness of our method in generating realistic and diverse defect images, but also manifest the benefits it brings to downstream defect inspection tasks.*</font>
 
 ![](./docs/dfmgan.jpg)
 
 ## Update Notes
 
-- **12/21/2023** Pretrained ```hazelnut_good.pkl``` and ```hazelnut_hole.pkl``` are now available [here](https://drive.google.com/drive/folders/17LQeN3uFalD_wWqcObNLbbH3nsssmCfh?usp=sharing) for a quick trial.
+- **Jul. 26, 2024** :warning: I have marked some issues as [*good first issue*](https://github.com/Ldhlwh/DFMGAN/issues?q=is%3Aissue+label%3A%22good+first+issue%22+is%3Aclosed). You are welcome to check on them if you
+    - encounter errors w.r.t. plugins, especially bias_act and upfirdn2d;
+    - have insufficient VRAM;
+    - fail to render good defect-free images in the first stage (e.g. completely wrong color or orientation).
+- **Dec. 21, 2023** Pretrained ```hazelnut_good.pkl``` and ```hazelnut_hole.pkl``` are now available [here](https://drive.google.com/drive/folders/17LQeN3uFalD_wWqcObNLbbH3nsssmCfh?usp=sharing) for a quick trial.
 
 ## Getting Started
 
-- This repository is based on the official NVIDIA implementaion of [StyleGAN2-ADA](https://github.com/NVlabs/stylegan2-ada-pytorch). Follow the [requirements](https://github.com/NVlabs/stylegan2-ada-pytorch#requirements) of it before the steps below. (Windows and Docker are not supported.)
+- :warning: This repository is based on the official NVIDIA implementaion of [StyleGAN2-ADA](https://github.com/NVlabs/stylegan2-ada-pytorch). Follow the [requirements](https://github.com/NVlabs/stylegan2-ada-pytorch#requirements) of it before the steps below. (Docker is not supported. Windows might probably do with minor modification, yet have not been tested.)
 - Additional python libraries: ```pip install scipy psutil lpips tensorboard```.
 - Clone the repository:
     ```shell
