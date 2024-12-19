@@ -5,7 +5,7 @@
 This repository is the official implementation of the following paper, which focuses on defect/anomaly generation for downstream tasks in industries:
 
 > **Few-Shot Defect Image Generation via Defect-Aware Feature Manipulation**<br>
-> [Yuxuan Duan](https://github.com/Ldhlwh), [Yan Hong](https://github.com/hy-zpg), [Li Niu](http://www.ustcnewly.com/), [Liqing Zhang](https://bcmi.sjtu.edu.cn/~zhangliqing/)<br>
+> [Yuxuan Duan](https://ldhlwh.github.io/), [Yan Hong](https://github.com/hy-zpg), [Li Niu](http://www.ustcnewly.com/), [Liqing Zhang](https://bcmi.sjtu.edu.cn/~zhangliqing/)<br>
 > The 37th AAAI Conference on Artificial Intelligence (AAAI 2023)<br>
 > https://arxiv.org/abs/2303.02389<br>
 
